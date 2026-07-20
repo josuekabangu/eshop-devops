@@ -228,6 +228,37 @@ services:
         condition: service_started
     networks:
       - eshop-network
+  
+  # =====================================================================
+  # WEBAPP (Blazor frontend principal)
+  # =====================================================================
+  webapp:
+    build:
+      context: ..
+      dockerfile: src/WebApp/Dockerfile
+    container_name: webapp
+    environment:
+      ConnectionStrings__EventBus: "amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672/"
+      IdentityUrl: "http://192.168.56.11:5223"
+      CallBackUrl: "http://192.168.56.11:5100"
+      services__catalog-api__http__0: "http://catalog-api:8080"
+      services__ordering-api__http__0: "http://ordering-api:8080"
+      services__basket-api__http__0: "http://basket-api:8080"
+    ports:
+      - "5100:8080"
+    depends_on:
+      catalog-api:
+        condition: service_started
+      ordering-api:
+        condition: service_started
+      basket-api:
+        condition: service_started
+      identity-api:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - eshop-network
 
 
 volumes:
