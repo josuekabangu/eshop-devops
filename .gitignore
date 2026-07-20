@@ -1,0 +1,8 @@
+.env
+*.log
+*.pid
+.vagrant/
+**/__pycache__/
+*.tfstate
+*.tfstate.backup
+.terraform/

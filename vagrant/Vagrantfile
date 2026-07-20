@@ -1,0 +1,37 @@
+# Vagrantfile
+Vagrant.configure("2") do |config|
+  config.vm.box = "ubuntu/jammy64"       # Ubuntu 22.04 LTS, stable en prod
+  config.vm.hostname = "eshop-devops"
+  config.vm.network "private_network", ip: "192.168.56.11"
+
+  # Ressources — eShopOnContainers a ~10 conteneurs (API, Identity, RabbitMQ, Postgres, Elasticsearch...)
+  config.vm.provider "virtualbox" do |vb|
+    vb.name = "eshop-devops"
+    vb.memory = 6144   # 6 Go mini — ajuste selon ta RAM hôte
+    vb.cpus = 4
+  end
+
+  # Port forwarding pour accéder aux services depuis ton navigateur hôte
+  config.vm.network "forwarded_port", guest: 5100, host: 5200   # Web SPA
+  config.vm.network "forwarded_port", guest: 5105, host: 5205   # Identity API
+  config.vm.network "forwarded_port", guest: 15672, host: 15672 # RabbitMQ mgmt UI
+
+  # Provisioning shell — idempotent : peut tourner plusieurs fois sans casser la VM
+  config.vm.provision "shell", inline: <<-SHELL
+    set -e
+    apt-get update -y
+
+    if ! command -v docker &> /dev/null; then
+      curl -fsSL https://get.docker.com | sh
+      usermod -aG docker vagrant
+    fi
+
+    if ! docker compose version &> /dev/null; then
+      apt-get install -y docker-compose-plugin
+    fi
+
+    if ! command -v git &> /dev/null; then
+      apt-get install -y git
+    fi
+  SHELL
+end
