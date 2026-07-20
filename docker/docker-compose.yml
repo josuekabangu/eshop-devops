@@ -208,6 +208,28 @@ services:
     networks:
       - eshop-network
 
+  # =====================================================================
+  # WEBHOOK-CLIENT (Blazor)
+  # =====================================================================
+  webhook-client:
+    build:
+      context: ..
+      dockerfile: src/WebhookClient/Dockerfile
+    container_name: webhook-client
+    environment:
+      IdentityUrl: "http://192.168.56.11:5223"
+      CallBackUrl: "http://192.168.56.11:5114"
+    ports:
+      - "5114:8080"
+    depends_on:
+      identity-api:
+        condition: service_started
+      webhooks-api:
+        condition: service_started
+    networks:
+      - eshop-network
+
+
 volumes:
   pg_data:
   redis_data:
