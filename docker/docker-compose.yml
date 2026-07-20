@@ -187,6 +187,27 @@ services:
     networks:
       - eshop-network
 
+  # =====================================================================
+  # WEBHOOKS.API
+  # =====================================================================
+  webhooks-api:
+    build:
+      context: ..
+      dockerfile: src/Webhooks.API/Dockerfile
+    container_name: webhooks-api
+    environment:
+      ConnectionStrings__webhooksdb: "Host=postgres;Port=5432;Database=webhooksdb;Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}"
+      ConnectionStrings__eventbus: "amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672/"
+    ports:
+      - "5110:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - eshop-network
+
 volumes:
   pg_data:
   redis_data:
