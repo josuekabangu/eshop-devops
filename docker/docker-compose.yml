@@ -92,6 +92,30 @@ services:
     networks:
       - eshop-network
 
+  # =====================================================================
+  # BASKET.API
+  # =====================================================================
+  basket-api:
+    build: 
+      context: ..
+      dockerfile: src/Basket.API/Dockerfile
+    container_name: basket-api
+    environment:
+      ConnectionStrings__redis: "redis:6379,password=${REDIS_PASSWORD}"
+      ConnectionStrings__eventbus: "amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672/"
+    ports:
+      - "5103:8080"
+    depends_on:
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - eshop-network
+
+       
+
+
 volumes:
   pg_data:
   redis_data:
