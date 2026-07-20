@@ -152,7 +152,22 @@ services:
         condition: service_healthy
     networks:
       - eshop-network
-       
+
+  # =====================================================================
+  # PAYMENT-PROCESSOR (background worker)
+  # =====================================================================
+  payment-processor:
+    build:
+      context: ..
+      dockerfile: src/PaymentProcessor/Dockerfile
+    container_name: payment-processor
+    environment:
+      ConnectionStrings__EventBus: "amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672/"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - eshop-network     
 
 
 volumes:
