@@ -2,10 +2,10 @@ FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 ENV DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1
 ENV DOTNET_CLI_TELEMETRY_OPTOUT=1
-COPY Directory.Packages.props .
-COPY Directory.Build.props .
-COPY nuget.config .
-COPY src ./src
+COPY eShop/Directory.Packages.props .
+COPY eShop/Directory.Build.props .
+COPY eShop/nuget.config .
+COPY eShop/src ./src
 RUN dotnet restore src/Ordering.API/Ordering.API.csproj
 RUN dotnet publish src/Ordering.API/Ordering.API.csproj -c Release -o /app/publish --no-restore
 

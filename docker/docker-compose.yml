@@ -56,7 +56,7 @@ services:
     container_name: rabbitmq
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
-      RABBITMQ_DEFAULT_PASSWORD: ${RABBITMQ_PASSWORD}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
       RABBITMQ_DEFAULT_VHOST: /
     ports:
       - "15672:15672"
@@ -71,6 +71,26 @@ services:
     networks:
       - eshop-network
 
+  # =====================================================================
+  # CATALOG.API
+  # =====================================================================
+  catalog-api:
+    build: 
+      context: ..
+      dockerfile: src/Catalog.API/Dockerfile 
+    container_name: catalog-api
+    environment:
+      ConnectionStrings__catalogdb: "Host=postgres;Port=5432;Database=catalogdb;Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}"
+      ConnectionStrings__eventbus: "amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672/"
+    ports:
+      - "5102:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - eshop-network
 
 volumes:
   pg_data:
