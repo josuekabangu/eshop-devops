@@ -96,13 +96,14 @@ services:
   # BASKET.API
   # =====================================================================
   basket-api:
-    build: 
+    build:
       context: ..
       dockerfile: src/Basket.API/Dockerfile
     container_name: basket-api
     environment:
       ConnectionStrings__redis: "redis:6379,password=${REDIS_PASSWORD}"
       ConnectionStrings__eventbus: "amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672/"
+      Identity__Url: "http://identity-api:8080"
     ports:
       - "5103:8080"
     depends_on:
@@ -124,6 +125,7 @@ services:
     environment:
       ConnectionStrings__orderingdb: "Host=postgres;Port=5432;Database=orderingdb;Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}"
       ConnectionStrings__eventbus: "amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672/"
+      Identity__Url: "http://identity-api:8080"
     ports:
       - "5104:8080"
     depends_on:
@@ -179,6 +181,11 @@ services:
     container_name: identity-api
     environment:
       ConnectionStrings__identitydb: "Host=postgres;Port=5432;Database=identitydb;Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}"
+      WebAppClient: "http://192.168.56.11:5100"
+      WebhooksWebClient: "http://192.168.56.11:5114"
+      BasketApiClient: "http://192.168.56.11:5103"
+      OrderingApiClient: "http://192.168.56.11:5104"
+      WebhooksApiClient: "http://192.168.56.11:5110"
     ports:
       - "5223:8080"
     depends_on:
@@ -198,6 +205,7 @@ services:
     environment:
       ConnectionStrings__webhooksdb: "Host=postgres;Port=5432;Database=webhooksdb;Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}"
       ConnectionStrings__eventbus: "amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672/"
+      Identity__Url: "http://identity-api:8080"
     ports:
       - "5110:8080"
     depends_on:
