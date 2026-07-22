@@ -13,7 +13,6 @@ create_db_if_not_exists() {
 }
 
 create_db_if_not_exists catalogdb
-create_db_if_not_exists basketdb
 create_db_if_not_exists orderingdb
 create_db_if_not_exists webhooksdb
 create_db_if_not_exists identitydb

@@ -7,9 +7,8 @@ services:
     container_name: postgres
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
-      RABBITMQ_DEFAULT_PASS: ${POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       PGDATA: /var/lib/postgresql/data/pgdata 
-      POSTGRES_HOST_AUTH_METHOD: trust
     ports:
       - "5432:5432"
     volumes:
@@ -181,11 +180,13 @@ services:
     container_name: identity-api
     environment:
       ConnectionStrings__identitydb: "Host=postgres;Port=5432;Database=identitydb;Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}"
+      IdentityServer__IssuerUri: "http://192.168.56.11:5223"
       WebAppClient: "http://192.168.56.11:5100"
       WebhooksWebClient: "http://192.168.56.11:5114"
       BasketApiClient: "http://192.168.56.11:5103"
       OrderingApiClient: "http://192.168.56.11:5104"
       WebhooksApiClient: "http://192.168.56.11:5110"
+      IdentityServer__IssuerUri: "http://192.168.56.11:5223"
     ports:
       - "5223:8080"
     depends_on:

@@ -6,13 +6,14 @@ COPY eShop/Directory.Packages.props .
 COPY eShop/Directory.Build.props .
 COPY eShop/nuget.config .
 COPY eShop/src ./src
+# Patch OAuth2 SameSite/SecurePolicy pour fonctionner en HTTP (dev sans TLS)
+COPY src/WebApp/Extensions.cs src/WebApp/Extensions/Extensions.cs
 RUN dotnet restore src/WebApp/WebApp.csproj
 RUN dotnet publish src/WebApp/WebApp.csproj -c Release -o /app/publish --no-restore
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0
 WORKDIR /app
 ENV ASPNETCORE_URLS=http://+:8080
-ENV ASPNETCORE_ENVIRONMENT=Production
 COPY --from=build /app/publish .
 EXPOSE 8080
 ENTRYPOINT ["dotnet", "WebApp.dll"]
