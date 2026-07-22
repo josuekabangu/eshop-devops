@@ -357,12 +357,58 @@ docker compose ps
 
 ---
 
-## 🔜 6. Transition vers k3s
+## ☸️ 6. Phase 1 K8s — Installation k3s et registre local
 
-- **`StatefulSet`** pour Postgres — identité de Pod stable + volume dédié
-- **`Job`** pour les migrations EF — résout le Bug 5 correctement (1 exécution, pas N par replica)
-- **`Ingress`** avec `eshop.local` — résout le Bug 9 par construction (1 issuer unique)
-- **Data Protection Keys sur Redis** — résout le Bug 10 avant de scaler identity-api
+### Installation
+
+```bash
+# k3s
+curl -sfL https://get.k3s.io | sh -
+
+# kubectl sans sudo
+mkdir -p ~/.kube
+sudo cp /etc/rancher/k3s/k3s.yaml ~/.kube/config
+sudo chown vagrant:vagrant ~/.kube/config
+echo 'export KUBECONFIG=~/.kube/config' >> ~/.bashrc
+
+# Registre local
+docker run -d --name registry --restart=always -p 5000:5000 registry:2
+
+# Docker daemon → HTTP autorisé
+sudo tee /etc/docker/daemon.json <<EOF
+{"insecure-registries": ["192.168.56.11:5000"]}
+EOF
+sudo systemctl restart docker
+
+# k3s → HTTP autorisé
+sudo tee /etc/rancher/k3s/registries.yaml <<EOF
+mirrors:
+  "192.168.56.11:5000":
+    endpoint:
+      - "http://192.168.56.11:5000"
+EOF
+sudo systemctl restart k3s
+```
+
+### Workflow image
+
+```bash
+docker build -t <service>:latest -f src/<Service>/Dockerfile .
+docker tag <service>:latest 192.168.56.11:5000/<service>:latest
+docker push 192.168.56.11:5000/<service>:latest
+# → image: 192.168.56.11:5000/<service>:latest dans le manifest K8s
+```
+
+### Prochains manifests
+
+```
+1. Postgres    → StatefulSet + Service headless + PVC
+2. catalog-api → Deployment + Service + ConfigMap
+3. Job migrations EF (résout Bug 5)
+4. Redis + RabbitMQ
+5. Autres microservices
+6. Ingress eshop.local (résout Bug 9 — double issuer)
+```
 
 ---
 
