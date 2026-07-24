@@ -12,10 +12,13 @@ Vagrant.configure("2") do |config|
   end
 
   # Port forwarding pour accéder aux services depuis ton navigateur hôte
-  config.vm.network "forwarded_port", guest: 5100, host: 5200   # Web SPA
-  config.vm.network "forwarded_port", guest: 5105, host: 5205   # Identity API
-  config.vm.network "forwarded_port", guest: 15672, host: 15672 # RabbitMQ mgmt UI
+  config.vm.network "forwarded_port", guest: 5100, host: 5100  # Web SPA
+  config.vm.network "forwarded_port", guest: 5105, host: 5105  # Identity API
+  config.vm.network "forwarded_port", guest: 15672, host: 15672 # RabbitMQ mgmt UI — utile pour debug des queues/events
 
+  config.vm.synced_folder "../eshop-devops", "/home/vagrant/EshopOnContainer",
+  owner: "vagrant", group: "vagrant" 
+  
   # Provisioning shell — idempotent : peut tourner plusieurs fois sans casser la VM
   config.vm.provision "shell", inline: <<-SHELL
     set -e
@@ -34,4 +37,14 @@ Vagrant.configure("2") do |config|
       apt-get install -y git
     fi
   SHELL
+
+  # Vagrant regenere private_key a chaque insertion de cle (insert_key: true par defaut),
+  # ce qui remet des permissions Windows heritees trop ouvertes -> SSH refuse la cle.
+  # On corrige automatiquement l'ACL apres chaque up/reload/resume.
+  config.trigger.after [:up, :reload, :resume] do |trigger|
+    trigger.info = "Correction des permissions Windows sur private_key..."
+    trigger.run = {
+      inline: "powershell -NoProfile -ExecutionPolicy Bypass -File \"#{File.dirname(__FILE__)}/fix-key-permissions.ps1\""
+    }
+  end
 end
