@@ -137,7 +137,7 @@ kubectl apply -f k8s/catalog-api.yaml
 
 | Manifest | Statut | Description |
 |----------|--------|-------------|
-| `postgres-statefulset.yaml` | 🔄 À écrire | PostgreSQL — StatefulSet + PVC |
+| `postgres/postgres-statefulset.yaml` | ✅ Validé | PostgreSQL — StatefulSet + PVC |
 | `redis-deployment.yaml` | ❌ | Redis — Deployment |
 | `rabbitmq-deployment.yaml` | ❌ | RabbitMQ — Deployment |
 | `identity-api.yaml` | ❌ | Duende IdentityServer |
@@ -207,5 +207,21 @@ basket-api → eshop.local/identity → identity-api (même issuer)
 | Docker daemon insecure-registries | ✅ |
 | k3s registries.yaml | ✅ |
 | Pipeline build→push→pull validé | ✅ |
-| Postgres StatefulSet | 🔄 |
+| Postgres StatefulSet | ✅ |
 | Autres services | ❌ |
+
+---
+
+## Validation Postgres StatefulSet
+
+```bash
+kubectl get svc postgres        # ClusterIP: None → Service headless (requis pour StatefulSet)
+kubectl get endpoints postgres  # 10.42.0.10:5432 → Pod bien routé
+kubectl run pg-test --rm -it --image=postgres:15 --restart=Never -- \
+  psql -h postgres -U postgres -d catalogdb   # connexion réseau OK
+kubectl delete pod postgres-0   # simulate crash/reschedule
+kubectl get pods -w             # revient en postgres-0 (même nom)
+kubectl exec -it postgres-0 -- psql -U postgres -l   # les 4 bases toujours présentes
+```
+
+Résultat : le Pod redémarre avec la même identité et retrouve son volume — persistance confirmée, comportement StatefulSet correct.

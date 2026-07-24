@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init
+data:
+  01-init-db.sh: |
+    #!/bin/bash
+    set -e
+    create_db_if_not_exists() {
+      local db=$1
+      local exists=$(psql -U "$POSTGRES_USER" -tAc "SELECT 1 FROM pg_database WHERE datname='$db'")
+      if [ "$exists" != "1" ]; then
+        psql -U "$POSTGRES_USER" -c "CREATE DATABASE $db"
+        echo "Base $db créée"
+      else
+        echo "Base $db existe déjà — ignoré"
+      fi
+    }
+    create_db_if_not_exists catalogdb
+    create_db_if_not_exists orderingdb
+    create_db_if_not_exists webhooksdb
+    create_db_if_not_exists identitydb
