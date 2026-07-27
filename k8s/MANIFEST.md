@@ -136,7 +136,7 @@ kubectl apply -f k8s/catalog-api.yaml
 | Manifest | Statut | Description |
 |----------|--------|-------------|
 | `postgres/postgres-statefulset.yaml` | ✅ Validé | PostgreSQL — StatefulSet + PVC |
-| `redis-deployment.yaml` | ❌ | Redis — Deployment |
+| `redis/redis-statefulset.yaml` | ✅ Validé | Redis — StatefulSet + PVC (AOF, persistance confirmée) |
 | `rabbitmq/rabbitmq-statefulset.yaml` | ✅ Validé | RabbitMQ — StatefulSet + PVC (identité de nœud liée au hostname) |
 | `identity-api.yaml` | ❌ | Duende IdentityServer |
 | `catalog-api.yaml` | 🔄 En cours | Catalog API — manifeste incomplet (`image:` vide, structure `template`/`spec` à corriger) |
@@ -249,6 +249,92 @@ Résultat : le Pod redémarre avec la même identité et retrouve son volume —
 
 ---
 
+## Étape 2 — RabbitMQ & Redis en `StatefulSet`
+
+### Contexte
+
+Suite à la migration de Postgres, `catalog-api` a révélé une dépendance croisée non résolue : il a besoin de **RabbitMQ** (event bus) en plus de Postgres. Comme K3s (containerd) et Docker Compose (dockerd) utilisent des réseaux totalement isolés l'un de l'autre, `catalog-api` ne pourrait pas résoudre `rabbitmq` si ce dernier restait uniquement en Docker Compose.
+
+**Décision prise :** migrer RabbitMQ vers K3s également, avant d'écrire le manifest `catalog-api`. Redis a été traité dans la foulée, par cohérence méthodologique (même famille de service stateful).
+
+### 🐰 RabbitMQ
+
+**Pourquoi StatefulSet et pas Deployment :** RabbitMQ maintient un état interne (files de messages non consommés, définitions d'exchanges/queues). Perdre ce volume au redémarrage d'un Pod ferait perdre des messages en transit. Même en instance unique aujourd'hui, un futur clustering RabbitMQ (haute disponibilité) exigerait une identité réseau stable par nœud — rôle du `StatefulSet`, pas du `Deployment`.
+
+```
+k8s/rabbitmq/
+├── rabbitmq-secret.yaml
+├── rabbitmq-service.yaml
+└── rabbitmq-statefulset.yaml
+```
+
+**Point technique — `rabbitmq-service.yaml` :** deux ports exposés (`5672` AMQP, `15672` management) → chacun doit être **nommé** explicitement (`name: amqp`, `name: management`), une règle Kubernetes dès qu'un Service expose plus d'un port.
+
+**Résultat de déploiement :** `rabbitmq-0` en `1/1 Running`, démarrage propre confirmé par les logs : Mnesia/Khepri initialisés, plugins démarrés (`rabbitmq_management`, `rabbitmq_prometheus`, `rabbitmq_federation`, `rabbitmq_management_agent`, `rabbitmq_web_dispatch`), listener AMQP actif sur le port 5672. Persistance confirmée après `kubectl delete pod rabbitmq-0` : le nom de nœud (`rabbit@rabbitmq-0`) reste identique après redémarrage.
+
+### 🟥 Redis
+
+**Subtilités de traduction depuis le Compose d'origine :**
+
+```yaml
+# docker-compose.yml — Redis
+redis:
+  image: redis:7
+  command:
+    - redis-server
+    - --requirepass ${REDIS_PASSWORD}
+    - --maxmemory 1gb
+    - --maxmemory-policy allkeys-lru
+    - --appendonly yes
+    - --appendfsync everysec
+  healthcheck:
+    test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+```
+
+Deux points nécessitant une attention particulière :
+1. Le mot de passe est un **argument de ligne de commande** (`--requirepass`), pas juste une variable lue passivement — il faut l'injecter dans `command`.
+2. Le `healthcheck` utilise aussi ce mot de passe — même souci pour la probe K8s.
+
+```
+k8s/redis/
+├── redis-secret.yaml
+├── redis-service.yaml
+└── redis-statefulset.yaml
+```
+
+**Point technique important — deux mécanismes de substitution différents :**
+
+| Endroit | Syntaxe | Pourquoi |
+|---|---|---|
+| `command:` / `args:` | `$(REDIS_PASSWORD)` | Kubernetes substitue lui-même les champs `command`/`args` à partir des variables déclarées dans `env:` — mécanisme natif |
+| `probe.exec.command` | `sh -c "redis-cli -a \"$REDIS_PASSWORD\" ping"` | Kubernetes **ne fait pas** cette substitution `$(VAR)` dans les probes — il faut passer par un shell qui lit la variable d'environnement réelle du conteneur |
+
+⚠️ Confondre ces deux mécanismes est une source d'erreur fréquente : `$(VAR)` ne fonctionne que dans `command`/`args`, jamais dans les champs de probe.
+
+**Résultat de déploiement :** `redis-0` : transition `0/1 Running` → `1/1 Running` en ~20 secondes (le temps que le `readinessProbe` confirme `PONG`). Logs confirmant la persistance AOF active : fichiers `appendonly.aof.1.base.rdb` et `appendonly.aof.1.incr.aof` créés au démarrage. Persistance confirmée après `kubectl delete pod redis-0` : `SET test-key hello` avant suppression, `GET test-key` → `"hello"` après redémarrage.
+
+### Point de vigilance — pourquoi ni RabbitMQ ni Redis ne doivent scaler naïvement
+
+Pour les deux services, `replicas: N > 1` sans mécanisme de clustering réel produirait des instances **indépendantes**, sans partage d'état :
+
+- **Redis :** même avec `volumeClaimTemplates` (volume dédié par Pod), le cache en mémoire de chaque instance reste invisible aux autres — un client écrivant sur le Pod A ne verrait pas sa donnée si routé vers le Pod B. Un volume *partagé* entre plusieurs Pods serait pire : deux instances écrivant simultanément sur le même fichier AOF → corruption quasi certaine (Redis suppose être le seul écrivain).
+- **RabbitMQ :** un vrai clustering nécessite une configuration de peer discovery et une gestion explicite du quorum — pas un simple `replicas: N`.
+
+**Fix appliqué :** `replicas: 1` pour les deux, cohérent avec la leçon déjà tirée sur Postgres ([[statefulset-replicas-misconception]] — Bug 1 de l'Étape 1).
+
+⚠️ **[PROD BEST PRACTICE]** Une vraie haute disponibilité pour ces deux services nécessite soit un mode cluster natif (Redis Cluster, RabbitMQ avec peer discovery), soit un opérateur Kubernetes dédié — hors de portée d'un `StatefulSet` fait main, sujet de Phase 2/3.
+
+### Piliers consolidés durant cette étape
+
+| Concept | Application concrète |
+|---|---|
+| **Outils de diagnostic natifs pour les probes** | `pg_isready`, `rabbitmq-diagnostics ping`, `redis-cli ping` — toujours préférer l'outil officiel de la techno à un simple test de port TCP, qui ne garantit jamais qu'un service est fonctionnellement prêt. |
+| **Readiness vs Liveness** | *Readiness* : "dois-je recevoir du trafic ?" (retrait sans redémarrage). *Liveness* : "suis-je bloqué, faut-il me recréer ?" — délais de tolérance volontairement différents (`initialDelaySeconds` plus court pour readiness). |
+| **Stateful ≠ réplication automatique** | Rappel transversal (déjà vu sur Postgres) : scaler un `StatefulSet` donne des identités et volumes séparés, jamais une synchronisation de données automatique. |
+| **Substitution de variables : deux mécanismes distincts** | `$(VAR)` dans `command`/`args` (natif K8s) vs lecture shell classique (`$VAR` via `sh -c`) dans les probes — ne pas confondre les deux contextes. |
+
+---
+
 ## Dette technique identifiée — à traiter dans une session future
 
 **Sujet :** le script `docker-entrypoint-initdb.d/01-init-db.sh` (création des 4 bases) reste, pour l'instant, couplé au cycle de vie du conteneur Postgres — exactement le même anti-pattern que le Bug 5 de la Phase 1 Docker (migrations EF Core exécutées via `HostedService` plutôt qu'un `Job` séparé), mais à l'étage "création de base" plutôt que "création de tables".
@@ -330,10 +416,11 @@ basket-api → eshop.local/identity → identity-api (même issuer)
 | Pipeline build→push→pull validé | ✅ |
 | Postgres StatefulSet | ✅ |
 | RabbitMQ StatefulSet | ✅ |
+| Redis StatefulSet | ✅ |
 | Autres services | ❌ |
 
 ---
 
 ## 🔜 Prochaine étape
 
-Traduction de `catalog-api` (service stateless) : `Deployment` + `Service` + `ConfigMap` + `Secret`, en réutilisant la même méthode. Point d'attention à vérifier : la chaîne de connexion `Host=postgres` reste valide grâce au Service headless déjà en place, aucune modification requise côté nommage réseau.
+Configuration de `/etc/rancher/k3s/registries.yaml` pour permettre à K3s de tirer les images depuis le registre local (`192.168.56.11:5000`, voir [`registry/REGISTRY.md`](../registry/REGISTRY.md)), puis écriture du premier `Deployment` applicatif : `catalog-api`, avec ses trois dépendances désormais toutes disponibles dans le même cluster K3s (`postgres`, `rabbitmq`, et Redis pour les futurs services qui en ont besoin comme `basket-api`). Point d'attention à vérifier : les chaînes de connexion `Host=postgres` / `rabbitmq:5672` restent valides grâce aux Services headless déjà en place, aucune modification requise côté nommage réseau.
