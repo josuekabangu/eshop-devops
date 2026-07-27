@@ -139,7 +139,7 @@ kubectl apply -f k8s/catalog-api.yaml
 | `redis/redis-statefulset.yaml` | ✅ Validé | Redis — StatefulSet + PVC (AOF, persistance confirmée) |
 | `rabbitmq/rabbitmq-statefulset.yaml` | ✅ Validé | RabbitMQ — StatefulSet + PVC (identité de nœud liée au hostname) |
 | `identity-api.yaml` | ❌ | Duende IdentityServer |
-| `catalog-api.yaml` | 🔄 En cours | Catalog API — manifeste incomplet (`image:` vide, structure `template`/`spec` à corriger) |
+| `catalog-api/catalog-deployment.yaml` | ✅ Validé | Catalog API — Deployment stateless, premier service applicatif |
 | `basket-api.yaml` | ❌ | Basket API |
 | `ordering-api.yaml` | ❌ | Ordering API |
 | `webapp.yaml` | ❌ | Blazor WebApp (BFF) |
@@ -335,6 +335,78 @@ Pour les deux services, `replicas: N > 1` sans mécanisme de clustering réel pr
 
 ---
 
+## Étape 3 — `catalog-api` (Deployment) — premier service applicatif
+
+### Contexte
+
+Premier `Deployment` stateless du projet, s'appuyant sur les 3 services d'infrastructure déjà migrés (`postgres`, `rabbitmq`, `redis`) et sur le registre Docker local pour la distribution d'image.
+
+### Fichiers produits
+
+```
+k8s/catalog-api/
+├── catalog-api-secret.yaml
+├── catalog-deployment.yaml
+└── catalog-api-service.yaml
+```
+
+Pas de `ConfigMap` pour ce service : le `docker-compose.yml` d'origine ne définissait que 2 variables, toutes deux sensibles (`ConnectionStrings__catalogdb`, `ConnectionStrings__eventbus`) — traduction fidèle, tout passe par un `Secret`.
+
+**Pourquoi `ClusterIP` classique (pas headless) :** contrairement à Postgres/RabbitMQ/Redis, `catalog-api` est **stateless** — chaque replica est interchangeable, aucune raison de cibler une instance précise. Le load-balancing automatique d'un `Service` classique est ici l'objectif recherché, pas un problème à contourner.
+
+**Pourquoi pas de `depends_on` :** aucun équivalent K8s n'existe. La résilience au démarrage repose sur deux mécanismes combinés : le retry natif des clients Npgsql/RabbitMQ côté code applicatif, et le `readinessProbe` qui empêche le `Service` de router du trafic tant que le Pod n'est pas jugé prêt.
+
+### Bugs rencontrés et corrigés
+
+**Bug 1 — `${VAR}` non substitué dans le Secret**
+Symptôme : `Npgsql.PostgresException: 28P01: password authentication failed for user "${POSTGRES_USER}"`.
+Root cause : contrairement à Docker Compose, **Kubernetes ne fait aucune substitution de variables** (`${VAR}`) dans les manifests YAML. `kubectl apply` envoie le fichier tel quel à l'API — la chaîne `${POSTGRES_USER}` a été stockée et utilisée littéralement comme nom d'utilisateur.
+Fix : remplacement par les valeurs réelles, en dur, dans le Secret.
+Point de vigilance additionnel : modifier un `Secret` référencé par un Pod déjà démarré ne redémarre pas automatiquement ce Pod — les variables d'environnement sont injectées une seule fois, au démarrage du conteneur. `kubectl rollout restart deployment catalog-api` est nécessaire après toute modification de Secret/ConfigMap consommé en variables d'environnement.
+Principe : Kubernetes ne propose aucun mécanisme de templating natif dans ses manifests bruts — contrairement à Docker Compose et son fichier `.env`. Des outils comme Helm ou Kustomize existent pour combler ce manque (hors scope de cette étape).
+Dette identifiée : les mots de passe Postgres et RabbitMQ existent maintenant dupliqués dans deux endroits (`postgres-secret.yaml`/`rabbitmq-secret.yaml` d'un côté, copiés en dur dans `catalog-api-secret.yaml` de l'autre) — aucune référence croisée entre Secrets. Un changement de mot de passe doit être répercuté manuellement partout où il est dupliqué. Solution à explorer en Phase 2/3 : gestionnaire de secrets externe (Vault, AWS Secrets Manager) comme source unique de vérité.
+
+**Bug 2 — `readinessProbe` sur `/health`, endpoint inexistant en Production**
+Symptôme : Pod en `Running` mais `0/1 READY` indéfiniment, malgré des logs applicatifs entièrement sains.
+Root cause : dans `src/eShop.ServiceDefaults/Extensions.cs`, les endpoints `/health` et `/alive` sont mappés **uniquement** si `app.Environment.IsDevelopment()` — décision de sécurité intentionnelle des auteurs du repo (un endpoint de santé détaillé peut révéler des informations internes sensibles en production). Le Pod tournant en `ASPNETCORE_ENVIRONMENT=Production`, `/health` renvoie systématiquement 404 → le `readinessProbe` HTTP échoue en boucle.
+
+Trois options évaluées :
+
+| Option | Description | Trade-off |
+|---|---|---|
+| A. Retirer la condition `IsDevelopment()` | Exposer `/health`/`/alive` inconditionnellement | Réintroduit le risque de sécurité que les auteurs voulaient éviter |
+| B. `readinessProbe`/`livenessProbe` de type `tcpSocket` | Vérifie uniquement que le port 8080 est ouvert | Ne garantit pas que l'app peut réellement parler à Postgres/RabbitMQ |
+| C. Endpoint minimal dédié (`/readyz`), non conditionné, sans appel réseau | Solution la plus proche des pratiques de production réelles | Nécessite de modifier le code source et de rebuild l'image |
+
+Décision prise : option B (`tcpSocket`), pour avancer rapidement sans modifier le code applicatif du repo tiers.
+
+⚠️ Dette technique tracée : ce `tcpSocket` confirme uniquement que Kestrel écoute sur le port — il ne garantit pas que la connexion Postgres/RabbitMQ est fonctionnelle. Amélioration possible plus tard : implémenter l'option C, un endpoint `/readyz` minimal, **sans aucun appel réseau**.
+
+**Pourquoi un endpoint de ce type ne doit jamais faire d'appel réseau :** un `readinessProbe` s'exécute en boucle continue pour toute la durée de vie du Pod. Si cet endpoint interrogeait Postgres/RabbitMQ à chaque appel, sous forte charge, les requêtes de probe s'ajouteraient au trafic applicatif réel sur des ressources déjà saturées. Un échec de probe dû à la surcharge retirerait le Pod de la rotation du Service, concentrant encore plus de trafic sur les Pods restants — panne en cascade auto-infligée, où le mécanisme censé protéger le système l'aggrave.
+
+### Validation sur k3s
+
+```
+kubectl get pods
+# catalog-api-8b947fcdc-wrmbd   1/1   Running
+
+kubectl describe pod -l app=catalog-api | grep -A5 Events
+# Pulling image "localhost:5000/catalog-api:latest"
+# Successfully pulled image ... in 18ms
+```
+
+### Piliers consolidés durant cette étape
+
+| Concept | Application concrète |
+|---|---|
+| **Pas de templating natif en K8s** | `${VAR}` n'est jamais substitué par `kubectl apply` — toute valeur doit être littérale dans le manifest, ou gérée via un outil dédié (Helm, Kustomize) non couvert ici. |
+| **Immutabilité des variables d'environnement d'un Pod** | Modifier un Secret/ConfigMap référencé ne relance pas automatiquement les Pods qui le consomment — `kubectl rollout restart` est requis. |
+| **Séparation "endpoint de diagnostic" vs "endpoint pour orchestrateur"** | Un health check applicatif complet (vérifie les dépendances) et une probe minimale pour l'orchestrateur (vérifie juste que le process répond) répondent à des besoins différents. |
+| **Résilience distribuée** | Une probe ne doit jamais elle-même devenir un facteur d'aggravation de panne sous charge — principe transversal à tout système distribué. |
+| **Absence de `depends_on`** | Résilience déléguée au code applicatif (retry client Npgsql/RabbitMQ) et aux probes, jamais à un ordre de démarrage garanti par la plateforme. |
+
+---
+
 ## Dette technique identifiée — à traiter dans une session future
 
 **Sujet :** le script `docker-entrypoint-initdb.d/01-init-db.sh` (création des 4 bases) reste, pour l'instant, couplé au cycle de vie du conteneur Postgres — exactement le même anti-pattern que le Bug 5 de la Phase 1 Docker (migrations EF Core exécutées via `HostedService` plutôt qu'un `Job` séparé), mais à l'étage "création de base" plutôt que "création de tables".
@@ -417,10 +489,11 @@ basket-api → eshop.local/identity → identity-api (même issuer)
 | Postgres StatefulSet | ✅ |
 | RabbitMQ StatefulSet | ✅ |
 | Redis StatefulSet | ✅ |
+| catalog-api Deployment | ✅ |
 | Autres services | ❌ |
 
 ---
 
 ## 🔜 Prochaine étape
 
-Configuration de `/etc/rancher/k3s/registries.yaml` pour permettre à K3s de tirer les images depuis le registre local (`192.168.56.11:5000`, voir [`registry/REGISTRY.md`](../registry/REGISTRY.md)), puis écriture du premier `Deployment` applicatif : `catalog-api`, avec ses trois dépendances désormais toutes disponibles dans le même cluster K3s (`postgres`, `rabbitmq`, et Redis pour les futurs services qui en ont besoin comme `basket-api`). Point d'attention à vérifier : les chaînes de connexion `Host=postgres` / `rabbitmq:5672` restent valides grâce aux Services headless déjà en place, aucune modification requise côté nommage réseau.
+Traduction d'un service supplémentaire (`ordering-api` ou équivalent), en réutilisant la même méthode que pour `catalog-api`. Point d'attention à surveiller dès la prochaine étape : la duplication des secrets identifiée comme dette technique (Étape 3, Bug 1) — à traiter si le nombre de services dupliquant les mêmes identifiants Postgres/RabbitMQ devient trop important à maintenir manuellement.
