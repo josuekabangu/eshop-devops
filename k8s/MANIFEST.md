@@ -145,8 +145,8 @@ kubectl apply -f k8s/catalog-api.yaml
 | `order-processor/order-processor-deployment.yaml` | ✅ Validé | Worker en arrière-plan, sans Service (pas de port exposé) |
 | `payment-processor/payment-processor-deployment.yaml` | ✅ Validé | Worker en arrière-plan, sans Service, Secret dédié (RabbitMQ uniquement) |
 | `webhooks-api/webhooks-deployment.yaml` | ✅ Validé | Webhooks API — Postgres + RabbitMQ + Identity, aucun bug |
-| `webhook-client.yaml` | ❌ | Blazor OAuth2 client |
-| `webapp.yaml` | ❌ | Blazor WebApp (BFF) |
+| `webhook-client/webhook-client-deployment.yaml` | ✅ Validé | Blazor OAuth2 client — NodePort seul, pas de Service interne |
+| `webapp/webapp-deployment.yaml` | ✅ Validé | Blazor WebApp (BFF) — dernière pièce, double Service, catalogue + panier validés |
 | `migrations-job.yaml` | ❌ | Job EF Core (Bug 5 Phase 1 Docker) |
 | `ingress.yaml` | ❌ | Traefik — `eshop.local` |
 
@@ -642,6 +642,70 @@ Juste après, `fail: ... Failed executing DbCommand` sur `SELECT "MigrationId" F
 
 ---
 
+## Étape 8 — `webhook-client` & `webapp` (derniers composants)
+
+### `webhook-client`
+
+Aucune donnée sensible — uniquement des URLs (`IdentityUrl`, `CallBackUrl`) → `ConfigMap` seul, pas de `Secret`. Principe interne/externe confirmé une fois de plus : `IdentityUrl` en adresse externe (`192.168.56.11:5223`), le navigateur devant la résoudre pour la redirection OAuth, pas le serveur. Un seul `Service` `NodePort` (`webhook-client-external`) — pas de Service interne, rien d'autre dans le cluster n'appelle ce composant.
+
+Port `5114` hors plage NodePort par défaut, mais déjà couvert par l'élargissement `5000-32767` fait à l'Étape 4 — aucune configuration supplémentaire nécessaire.
+
+Validé : `1/1 Running`, page "Order management" affichée via `http://192.168.56.11:5114`.
+
+### `webapp` — le service le plus richement connecté
+
+```
+k8s/webapp/
+├── webapp-secret.yaml            (EventBus)
+├── webapp-configmap.yaml         (IdentityUrl/CallBackUrl externes + services__*__http__0 internes)
+├── webapp-deployment.yaml
+├── webapp-service.yaml           (ClusterIP)
+└── webapp-service-external.yaml  (NodePort 5100)
+```
+
+`webapp` orchestre simultanément Catalog, Ordering, Basket et Identity. Séparation interne/externe appliquée **sur un même Deployment** : `IdentityUrl`/`CallBackUrl` en adresses externes (résolues par le navigateur), `services__catalog-api__http__0` etc. en noms de Service K8s internes (résolus côté serveur) — le pattern le plus récurrent de toute la migration, appliqué ici à son point le plus dense.
+
+### Bug fonctionnel — même mismatch Redis, révélé cette fois par un vrai scénario utilisateur
+
+Premier test de bout en bout (ajout au panier) → `Grpc.Core.RpcException: Status(StatusCode="Unknown", Detail="Exception was thrown by handler.")` côté `webapp`, message générique masquant la vraie cause en `Production`.
+
+**Méthode de diagnostic déterminante :** le message côté `webapp` (l'appelant) ne montrait qu'une exception générique. La cause réelle n'est apparue qu'en consultant les logs de `basket-api` (le service **appelé**) :
+```
+StackExchange.Redis.RedisConnectionException: AuthenticationFailure
+   ---> System.Exception: Error: NOAUTH Authentication required.
+```
+**Principe à généraliser :** face à un appel réseau (HTTP, gRPC) qui échoue avec un message vague côté appelant, toujours consulter en priorité les logs du service **appelé** — c'est lui qui détient l'exception réelle et sa stack trace complète.
+
+Root cause : même mismatch de mot de passe Redis que celui déjà documenté et corrigé à l'Étape 6 ([[k8s-redis-password-mismatch]]) — confirmé ici non pas via un test `redis-cli` isolé, mais via un vrai échec fonctionnel utilisateur. Preuve concrète que la dette technique des secrets dupliqués sans référence croisée (identifiée dès l'Étape 3) produit des incohérences réelles, pas seulement théoriques.
+
+**Solution structurelle à envisager (Phase 2/3) :** un gestionnaire de secrets externe (Vault, AWS Secrets Manager) comme source unique de vérité, éliminant la duplication manuelle entre Secrets Kubernetes.
+
+Validé après re-confirmation : catalogue affiché avec succès (filtres, marques, images), panier fonctionnel — flux complet de bout en bout validé.
+
+### Piliers consolidés durant cette étape
+
+| Concept | Application concrète |
+|---|---|
+| **Interne vs externe (DNS)** | Confirmé une nouvelle fois sur `webhook-client` et `webapp` — le pattern le plus récurrent de toute la migration, désormais appliqué sans hésitation même sur le service le plus connecté. |
+| **Diagnostic au bon niveau (service appelé, pas appelant)** | Un message d'erreur générique côté client (gRPC, HTTP) ne doit jamais être pris pour la cause réelle — toujours remonter aux logs du service qui a effectivement levé l'exception. |
+| **Dette technique confirmée par l'usage réel** | Les secrets dupliqués, identifiés en théorie dès l'Étape 3, ont produit un vrai bug fonctionnel ici — une dette tracée tôt permet un diagnostic rapide plutôt qu'une découverte à l'aveugle. |
+
+---
+
+## 🏆 Bilan — stack eShop complète sur K3s
+
+**12 composants opérationnels** (3 infrastructure + 9 applicatifs), validés de bout en bout : authentification OAuth2, catalogue, panier, commandes, paiement, notifications webhooks.
+
+| Catégorie | Composants |
+|---|---|
+| Infrastructure (StatefulSet) | `postgres`, `rabbitmq`, `redis` |
+| Applicatif (Deployment) | `catalog-api`, `identity-api`, `ordering-api`, `basket-api`, `webhooks-api`, `webhook-client`, `webapp` |
+| Workers (Deployment, sans Service) | `order-processor`, `payment-processor` |
+
+Restent hors scope de cette Phase 1 K8s : `migrations-job.yaml` (Job EF Core dédié, dette technique tracée depuis l'Étape 1) et `ingress.yaml` (Traefik, alternative future au NodePort pour l'exposition externe).
+
+---
+
 ## Dette technique identifiée — à traiter dans une session future
 
 **Sujet :** le script `docker-entrypoint-initdb.d/01-init-db.sh` (création des 4 bases) reste, pour l'instant, couplé au cycle de vie du conteneur Postgres — exactement le même anti-pattern que le Bug 5 de la Phase 1 Docker (migrations EF Core exécutées via `HostedService` plutôt qu'un `Job` séparé), mais à l'étage "création de base" plutôt que "création de tables".
@@ -731,10 +795,12 @@ basket-api → eshop.local/identity → identity-api (même issuer)
 | basket-api Deployment | ✅ |
 | payment-processor Deployment | ✅ |
 | webhooks-api Deployment | ✅ |
-| Autres services | ❌ |
+| webhook-client Deployment | ✅ |
+| webapp Deployment | ✅ |
+| **Stack eShop complète (12 composants)** | ✅ |
 
 ---
 
 ## 🔜 Prochaine étape
 
-`webhook-client` et `webapp` — les deux frontends Blazor restants, dépendant de la quasi-totalité des services déjà migrés (`identity-api`, `catalog-api`, `ordering-api`, `basket-api`). Derniers composants à migrer pour une stack eShop complète sur K3s. Reste à surveiller la duplication des secrets identifiée comme dette technique (Étape 3, Bug 1) — à traiter si le nombre de services dupliquant les mêmes identifiants Postgres/RabbitMQ devient trop important à maintenir manuellement.
+Stack applicative complète — reste la dette technique accumulée à traiter avant de clore la Phase 1 K8s : `migrations-job.yaml` (Job EF Core dédié, Étape 1) et le script d'init Postgres en `Job` séparé. Ensuite, `ingress.yaml` (Traefik) pourrait remplacer les `NodePort` (`identity-api-external`, `webhook-client-external`, `webapp-external`) par une exposition unifiée sous `eshop.local`. Au-delà, Phase 2 (Terraform, GitLab CI/CD) selon la roadmap de `DEVOPS.md`.
