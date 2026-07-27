@@ -1,0 +1,30 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payment-processor
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: payment-processor
+  template:
+    metadata:
+      labels:
+        app: payment-processor
+    spec:
+      containers:
+        - name: payment-processor
+          image: localhost:5000/payment-processor:latest
+          env:
+            - name: ConnectionStrings__EventBus
+              valueFrom:
+                secretKeyRef:
+                  name: payment-processor-secrets
+                  key: ConnectionStrings__EventBus
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "128Mi"
+            limits:
+              cpu: "250m"
+              memory: "256Mi"
