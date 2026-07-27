@@ -141,7 +141,8 @@ kubectl apply -f k8s/catalog-api.yaml
 | `identity-api/identity-deployment.yaml` | ✅ Validé | Duende IdentityServer — double Service (ClusterIP interne + NodePort externe) |
 | `catalog-api/catalog-deployment.yaml` | ✅ Validé | Catalog API — Deployment stateless, premier service applicatif |
 | `basket-api.yaml` | ❌ | Basket API |
-| `ordering-api.yaml` | ❌ | Ordering API |
+| `ordering-api/ordering-deployment.yaml` | ✅ Validé | Ordering API — premier service migré sans aucun bug |
+| `order-processor.yaml` | ❌ | Worker en arrière-plan, sans Service (pas de port exposé) |
 | `webapp.yaml` | ❌ | Blazor WebApp (BFF) |
 | `migrations-job.yaml` | ❌ | Job EF Core (Bug 5 Phase 1 Docker) |
 | `ingress.yaml` | ❌ | Traefik — `eshop.local` |
@@ -493,6 +494,64 @@ curl -s -o /dev/null -w "%{http_code}\n" http://192.168.56.11:5223/.well-known/o
 
 ---
 
+## Étape 5 — `ordering-api` (Deployment)
+
+### Contexte
+
+Traduction débloquée par la migration préalable d'`identity-api` (Étape 4) : `ordering-api` référence `Identity__Url: "http://identity-api:8080"`, une dépendance qui aurait été inatteignable si `identity-api` était resté en Docker Compose.
+
+**Résultat notable :** premier service migré **sans aucun bug** — confirmation que la méthode (Secret → ConfigMap → Service → Deployment, probes `tcpSocket`, build/push avant apply) est maintenant maîtrisée.
+
+### Fichiers produits
+
+```
+k8s/ordering-api/
+├── ordering-api-secret.yaml
+├── ordering-api-configmap.yaml
+├── ordering-deployment.yaml
+└── ordering-api-service.yaml
+```
+
+**Point de méthode important :** `Identity__Url` pointe vers `http://identity-api:8080` — le `Service` **interne** (`ClusterIP`) créé à l'Étape 4 — et non vers `identity-api-external:5223` (réservé au navigateur). `ordering-api` est un service backend, sa communication avec `identity-api` reste entièrement interne au cluster.
+
+### Flux de déploiement appliqué
+
+```bash
+# 1. Build + push — étape désormais systématique avant tout apply
+docker build -f ../src/Ordering.API/Dockerfile -t localhost:5000/ordering-api:latest ..
+docker push localhost:5000/ordering-api:latest
+
+# 2. Vérification pull K3s
+sudo k3s crictl pull localhost:5000/ordering-api:latest
+
+# 3. Application des manifests
+kubectl apply -f ordering-api-secret.yaml
+kubectl apply -f ordering-api-configmap.yaml
+kubectl apply -f ordering-api-service.yaml
+kubectl apply -f ordering-deployment.yaml
+```
+
+### Résultat — succès dès la première tentative
+
+`ordering-api-7df666454d-9rqcn` : `1/1 Running` en moins de 30 secondes. Logs confirmant :
+- 4 migrations EF Core appliquées avec succès (`Initial`, `FixOrderitemseqSchema`, `Outbox`, `UseEnumForOrderStatus`)
+- Création complète du schéma `ordering` (tables `buyers`, `orders`, `orderItems`, `paymentmethods`, `IntegrationEventLog`, séquences dédiées)
+- Seed initial des `cardtypes`
+- Connexion RabbitMQ démarrée (`Starting RabbitMQ connection on a background thread`)
+- Application démarrée et à l'écoute sur le port 8080, `Hosting environment: Production`
+
+Aucun bug rencontré — les erreurs de nommage, de casse YAML, et de gestion des `${VAR}` identifiées sur les étapes précédentes (Postgres, RabbitMQ, catalog-api, identity-api) ont toutes été évitées de manière proactive à l'écriture initiale des fichiers.
+
+### Piliers consolidés durant cette étape
+
+| Concept | Application concrète |
+|---|---|
+| **Séparation Secret / ConfigMap appliquée sans erreur** | Connection strings (sensibles) dans le Secret, `Identity__Url` (non sensible) dans le ConfigMap — distinction appliquée correctement dès l'écriture initiale, sans itération corrective. |
+| **Interne vs externe, choix cohérent d'emblée** | `Identity__Url` pointant vers le Service `ClusterIP` interne, pas vers le NodePort externe — distinction déjà rencontrée à plusieurs reprises (registre Docker, Identity issuer) appliquée correctement sans erreur cette fois. |
+| **Maturité méthodologique** | Premier service migré sans aucun bug de casse, de nommage, ou de référence — signe que la méthode de traduction Compose → K8s est désormais intégrée, pas seulement suivie mécaniquement. |
+
+---
+
 ## Dette technique identifiée — à traiter dans une session future
 
 **Sujet :** le script `docker-entrypoint-initdb.d/01-init-db.sh` (création des 4 bases) reste, pour l'instant, couplé au cycle de vie du conteneur Postgres — exactement le même anti-pattern que le Bug 5 de la Phase 1 Docker (migrations EF Core exécutées via `HostedService` plutôt qu'un `Job` séparé), mais à l'étage "création de base" plutôt que "création de tables".
@@ -577,10 +636,11 @@ basket-api → eshop.local/identity → identity-api (même issuer)
 | Redis StatefulSet | ✅ |
 | catalog-api Deployment | ✅ |
 | identity-api Deployment | ✅ |
+| ordering-api Deployment | ✅ |
 | Autres services | ❌ |
 
 ---
 
 ## 🔜 Prochaine étape
 
-Écriture du `Deployment` `ordering-api`, qui référencera enfin `http://identity-api:8080` en interne — la dépendance qui bloquait cette branche de travail depuis l'Étape 4. Point de vigilance : `ordering-api` a aussi besoin de RabbitMQ et Postgres, déjà disponibles, donc pas de nouvelle dépendance croisée attendue à ce stade. Reste également à surveiller la duplication des secrets identifiée comme dette technique (Étape 3, Bug 1) — à traiter si le nombre de services dupliquant les mêmes identifiants Postgres/RabbitMQ devient trop important à maintenir manuellement.
+`OrderProcessor` (worker en arrière-plan, sans port exposé, donc sans `Service` associé — décision confirmée par raisonnement plutôt que par essai-erreur). Réutilisation probable du `Secret ordering-api-secrets` existant, puisque ce worker partage les mêmes connexions Postgres/RabbitMQ. Reste à surveiller la duplication des secrets identifiée comme dette technique (Étape 3, Bug 1) — à traiter si le nombre de services dupliquant les mêmes identifiants Postgres/RabbitMQ devient trop important à maintenir manuellement.
