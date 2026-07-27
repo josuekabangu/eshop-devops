@@ -137,9 +137,9 @@ kubectl apply -f k8s/catalog-api.yaml
 |----------|--------|-------------|
 | `postgres/postgres-statefulset.yaml` | ✅ Validé | PostgreSQL — StatefulSet + PVC |
 | `redis-deployment.yaml` | ❌ | Redis — Deployment |
-| `rabbitmq-deployment.yaml` | ❌ | RabbitMQ — Deployment |
+| `rabbitmq/rabbitmq-statefulset.yaml` | ✅ Validé | RabbitMQ — StatefulSet + PVC (identité de nœud liée au hostname) |
 | `identity-api.yaml` | ❌ | Duende IdentityServer |
-| `catalog-api.yaml` | ❌ | Catalog API |
+| `catalog-api.yaml` | 🔄 En cours | Catalog API — manifeste incomplet (`image:` vide, structure `template`/`spec` à corriger) |
 | `basket-api.yaml` | ❌ | Basket API |
 | `ordering-api.yaml` | ❌ | Ordering API |
 | `webapp.yaml` | ❌ | Blazor WebApp (BFF) |
@@ -329,6 +329,7 @@ basket-api → eshop.local/identity → identity-api (même issuer)
 | k3s registries.yaml | ✅ |
 | Pipeline build→push→pull validé | ✅ |
 | Postgres StatefulSet | ✅ |
+| RabbitMQ StatefulSet | ✅ |
 | Autres services | ❌ |
 
 ---
