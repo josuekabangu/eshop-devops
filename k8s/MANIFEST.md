@@ -138,7 +138,7 @@ kubectl apply -f k8s/catalog-api.yaml
 | `postgres/postgres-statefulset.yaml` | ✅ Validé | PostgreSQL — StatefulSet + PVC |
 | `redis/redis-statefulset.yaml` | ✅ Validé | Redis — StatefulSet + PVC (AOF, persistance confirmée) |
 | `rabbitmq/rabbitmq-statefulset.yaml` | ✅ Validé | RabbitMQ — StatefulSet + PVC (identité de nœud liée au hostname) |
-| `identity-api.yaml` | ❌ | Duende IdentityServer |
+| `identity-api/identity-deployment.yaml` | ✅ Validé | Duende IdentityServer — double Service (ClusterIP interne + NodePort externe) |
 | `catalog-api/catalog-deployment.yaml` | ✅ Validé | Catalog API — Deployment stateless, premier service applicatif |
 | `basket-api.yaml` | ❌ | Basket API |
 | `ordering-api.yaml` | ❌ | Ordering API |
@@ -407,6 +407,92 @@ kubectl describe pod -l app=catalog-api | grep -A5 Events
 
 ---
 
+## Étape 4 — `identity-api` (Deployment + double exposition Service)
+
+### Contexte
+
+`ordering-api` référence `Identity__Url: "http://identity-api:8080"` dans son `docker-compose.yml` d'origine. Migrer `ordering-api` sans d'abord migrer `identity-api` aurait reproduit le même problème de réseaux isolés déjà rencontré avec RabbitMQ (Étape 2) : un nom de service Docker Compose inaccessible depuis K3s. Décision : migrer `identity-api` avant `ordering-api`.
+
+### Particularité de ce service — double besoin d'exposition
+
+Contrairement aux services précédents, `identity-api` doit être joignable par **deux publics différents**, avec des adresses différentes :
+- Le **navigateur** (flux de login OAuth) → doit atteindre `http://192.168.56.11:5223` (port fixé dans `IssuerUri`, cohérent avec la Phase 1 Docker Compose)
+- Les **autres services K8s** (`ordering-api`, futur `basket-api`...) → doivent atteindre `http://identity-api:8080` en interne
+
+Un seul `Service` ne peut pas remplir ces deux rôles proprement — solution : **deux `Service` distincts pointant vers le même `Deployment`** (`identity-api`, ClusterIP interne, et `identity-api-external`, NodePort).
+
+### Fichiers produits
+
+```
+k8s/identity-api/
+├── identity-api-secret.yaml
+├── identity-api-configmap.yaml
+├── identity-deployment.yaml
+├── identity-service.yaml            (interne, ClusterIP)
+└── identity-service-external.yaml   (externe, NodePort)
+```
+
+`identity-api-configmap.yaml` reprend l'`IssuerUri` et les URLs client (`WebAppClient`, `BasketApiClient`...) telles quelles — ces services tournent encore en Docker Compose à ce stade, exposés sur ces mêmes ports via le mapping Compose existant. `identity-deployment.yaml` utilise `envFrom.configMapRef` pour injecter toutes les clés du ConfigMap d'un coup, plutôt qu'une entrée `env` par clé.
+
+### Configuration K3s requise — extension de la plage NodePort
+
+Par défaut, K3s restreint les `NodePort` à la plage **30000-32767**. Le port `5223` requis (cohérence avec `IssuerUri` déjà fixé en Phase 1) est en dehors de cette plage.
+
+```bash
+sudo mkdir -p /etc/systemd/system/k3s.service.d
+sudo tee /etc/systemd/system/k3s.service.d/nodeport-range.conf <<EOF
+[Service]
+ExecStart=
+ExecStart=/usr/local/bin/k3s server --service-node-port-range=5000-32767
+EOF
+sudo systemctl daemon-reload
+sudo systemctl restart k3s
+```
+
+⚠️ **[PROD BEST PRACTICE]** Élargir la plage NodePort est acceptable pour du dev local avec des ports hérités. En prod réelle, l'exposition externe passerait plutôt par un `Ingress` avec un nom de domaine — pas de contrainte de plage de ports.
+
+### Bugs rencontrés et corrigés
+
+**Bug 1 — `kind: configMap` (casse incorrecte)**
+Symptôme : `no matches for kind "configMap" in version "v1"`.
+Root cause : Kubernetes attend `kind: ConfigMap` (casse exacte) — 3ᵉ occurrence de ce type d'erreur depuis le début du parcours (après `valueFROM` et `kind: Secret` au lieu de `ConfigMap`, tous deux sur Postgres).
+Fix : correction de la casse.
+
+**Bug 2 — `nodePort: 5223` hors plage autorisée**
+Symptôme : `Invalid value: 5223: provided port is not in the valid range. The range of valid ports is 30000-32767`.
+Root cause : plage NodePort par défaut de K3s incompatible avec le port hérité fixé dans `IssuerUri`.
+Fix : extension de la plage via override systemd (voir ci-dessus).
+Décision retenue plutôt que l'alternative : changer le port dans `IssuerUri` aurait cassé la cohérence avec toute la config OAuth déjà en place (tokens, redirections) — modifier la contrainte K3s a été jugé moins risqué que de propager un changement de port.
+
+**Bug 3 — nom de Secret incohérent (`identity-api-sercret` vs `identity-api-secrets`)**
+Symptôme : Pod bloqué en `CreateContainerConfigError`, sans logs applicatifs (`Error: secret "identity-api-secrets" not found`).
+Root cause : faute de frappe dans le nom du Secret créé, différent de la référence dans le Deployment — Kubernetes ne fait aucun rapprochement approximatif entre noms d'objets.
+Méthode de diagnostic : `kubectl describe pod <nom>`, section `Events` — contrairement à `kubectl logs` qui ne montre rien tant que le conteneur n'a jamais démarré, `describe` expose la cause exacte du blocage.
+Fix : alignement des noms.
+
+### Validation sur k3s
+
+```
+kubectl get pods
+# identity-api-5cd765c8dd-ww9wj   1/1   Running
+
+kubectl get svc identity-api identity-api-external
+# identity-api-external   NodePort   ...   5223:5223/TCP
+
+curl -s -o /dev/null -w "%{http_code}\n" http://192.168.56.11:5223/.well-known/openid-configuration
+# 200
+```
+
+### Piliers consolidés durant cette étape
+
+| Concept | Application concrète |
+|---|---|
+| **Double exposition Service pour un besoin double** | Un seul `Deployment` peut être ciblé par plusieurs `Service` différents, chacun avec un rôle distinct (interne vs externe) — pattern réutilisable pour tout service ayant ce même besoin dual. |
+| **`kubectl describe pod` avant `kubectl logs`** | Pour tout Pod qui ne démarre jamais son conteneur (`CreateContainerConfigError`, `ImagePullBackOff`...), `describe` + section `Events` est la première commande à lancer — `logs` ne fonctionne que si le conteneur a démarré au moins une fois. |
+| **Exactitude stricte des noms d'objets K8s** | 3ᵉ occurrence de bug de nommage depuis le début du parcours — Kubernetes ne tolère aucune approximation entre le nom déclaré et le nom référencé. |
+
+---
+
 ## Dette technique identifiée — à traiter dans une session future
 
 **Sujet :** le script `docker-entrypoint-initdb.d/01-init-db.sh` (création des 4 bases) reste, pour l'instant, couplé au cycle de vie du conteneur Postgres — exactement le même anti-pattern que le Bug 5 de la Phase 1 Docker (migrations EF Core exécutées via `HostedService` plutôt qu'un `Job` séparé), mais à l'étage "création de base" plutôt que "création de tables".
@@ -490,10 +576,11 @@ basket-api → eshop.local/identity → identity-api (même issuer)
 | RabbitMQ StatefulSet | ✅ |
 | Redis StatefulSet | ✅ |
 | catalog-api Deployment | ✅ |
+| identity-api Deployment | ✅ |
 | Autres services | ❌ |
 
 ---
 
 ## 🔜 Prochaine étape
 
-Traduction d'un service supplémentaire (`ordering-api` ou équivalent), en réutilisant la même méthode que pour `catalog-api`. Point d'attention à surveiller dès la prochaine étape : la duplication des secrets identifiée comme dette technique (Étape 3, Bug 1) — à traiter si le nombre de services dupliquant les mêmes identifiants Postgres/RabbitMQ devient trop important à maintenir manuellement.
+Écriture du `Deployment` `ordering-api`, qui référencera enfin `http://identity-api:8080` en interne — la dépendance qui bloquait cette branche de travail depuis l'Étape 4. Point de vigilance : `ordering-api` a aussi besoin de RabbitMQ et Postgres, déjà disponibles, donc pas de nouvelle dépendance croisée attendue à ce stade. Reste également à surveiller la duplication des secrets identifiée comme dette technique (Étape 3, Bug 1) — à traiter si le nombre de services dupliquant les mêmes identifiants Postgres/RabbitMQ devient trop important à maintenir manuellement.
