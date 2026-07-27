@@ -1,0 +1,35 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-processor
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: order-processor
+  template:
+    metadata:
+      labels:
+        app: order-processor
+    spec:
+      containers:
+        - name: order-processor
+          image: localhost:5000/order-processor:latest
+          env:
+            - name: ConnectionStrings__orderingdb
+              valueFrom:
+                secretKeyRef:
+                  name: ordering-api-secrets       # ← réutilisation du Secret existant
+                  key: ConnectionStrings__orderingdb
+            - name: ConnectionStrings__eventbus
+              valueFrom:
+                secretKeyRef:
+                  name: ordering-api-secrets
+                  key: ConnectionStrings__eventbus
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "128Mi"
+            limits:
+              cpu: "250m"
+              memory: "256Mi"
