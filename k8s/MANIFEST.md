@@ -144,7 +144,7 @@ kubectl apply -f k8s/catalog-api.yaml
 | `ordering-api/ordering-deployment.yaml` | ✅ Validé | Ordering API — premier service migré sans aucun bug |
 | `order-processor/order-processor-deployment.yaml` | ✅ Validé | Worker en arrière-plan, sans Service (pas de port exposé) |
 | `payment-processor/payment-processor-deployment.yaml` | ✅ Validé | Worker en arrière-plan, sans Service, Secret dédié (RabbitMQ uniquement) |
-| `webhooks-api.yaml` | ❌ | Webhooks API |
+| `webhooks-api/webhooks-deployment.yaml` | ✅ Validé | Webhooks API — Postgres + RabbitMQ + Identity, aucun bug |
 | `webhook-client.yaml` | ❌ | Blazor OAuth2 client |
 | `webapp.yaml` | ❌ | Blazor WebApp (BFF) |
 | `migrations-job.yaml` | ❌ | Job EF Core (Bug 5 Phase 1 Docker) |
@@ -597,6 +597,51 @@ Validé : `1/1 Running`, connexion RabbitMQ démarrée.
 
 ---
 
+## Étape 7 — `webhooks-api` (Deployment)
+
+### Contexte
+
+8ᵉ composant opérationnel sur K3s (3 infra + 5 applicatifs). `payment-processor` (worker minimal, dépendance unique à RabbitMQ, Secret dédié faute de connexion Postgres à partager) a déjà été traité et documenté à l'Étape 6. Seuls `webhook-client` et `webapp` restent à migrer pour compléter la stack eShop.
+
+⚠️ **Remarque de nommage héritée du repo d'origine, non corrigée** (sur `payment-processor`) : `ConnectionStrings__EventBus` (E et B majuscules) diffère en casse de `ConnectionStrings__eventbus` utilisé ailleurs. Sans impact fonctionnel — les clés de configuration .NET sont insensibles à la casse — conservée telle quelle par fidélité au code source plutôt que "nettoyée" arbitrairement.
+
+### `webhooks-api` — dépendances Postgres + RabbitMQ + Identity-API
+
+Pattern identique à `catalog-api`/`ordering-api`/`webhooks-api` : connection strings (Postgres + RabbitMQ) dans un `Secret`, `Identity__Url` dans un `ConfigMap`.
+
+```
+k8s/webhooks-api/
+├── webhooks-api-secret.yaml
+├── webhooks-api-configmap.yaml
+├── webhooks-deployment.yaml
+└── webhooks-api-service.yaml
+```
+
+### Résultat de déploiement
+
+`1/1 Running` en 51 secondes. Migration EF Core `Initial` appliquée avec succès sur `webhooksdb`, connexion RabbitMQ démarrée, Kestrel à l'écoute. Aucun bug de manifeste.
+
+**Détail technique observé dans les logs (bénin, pas un bug) :**
+```
+Cannot load library libgssapi_krb5.so.2
+Error: libgssapi_krb5.so.2: cannot open shared object file: No such file or directory
+```
+Npgsql tente par défaut une négociation **GSS encryption** (Kerberos), nécessitant une bibliothèque native absente de l'image `aspnet` minimale. Ce n'est pas une exception .NET structurée — remarquer l'absence de préfixe `info:`/`warn:`/`fail:` : c'est un `dlopen` natif qui écrit directement sur stderr, en dehors du logger ASP.NET. Npgsql détecte l'échec et retombe automatiquement sur une négociation TLS classique sans GSSAPI.
+
+Juste après, `fail: ... Failed executing DbCommand` sur `SELECT "MigrationId" FROM "__EFMigrationsHistory"` est le comportement **normal** d'EF Core sur une base neuve : la table n'existe pas encore avant la première migration, la requête échoue une fois par construction (`relation does not exist`), et EF Core en déduit qu'il doit appliquer `Initial` — ce qui suit immédiatement. Probablement rencontré aussi sur `catalog-api`/`ordering-api`/`identity-api` (bases créées fraîches par le script d'init Postgres K8s), simplement pas visible dans les extraits de logs collés à l'époque.
+
+### Piliers consolidés durant cette étape
+
+| Concept | Application concrète |
+|---|---|
+| **Un Secret dédié quand aucune réutilisation n'est pertinente** | `payment-processor` n'a pas de dépendance Postgres commune avec un autre service migré — contrairement à `order-processor`/`ordering-api`, un Secret dédié était la bonne approche, pas une règle générale de "toujours dédupliquer". |
+| **Incohérences de casse héritées du code source, à ne pas corriger sans raison** | `ConnectionStrings__EventBus` vs `ConnectionStrings__eventbus` : différence sans impact fonctionnel, conservée telle quelle par fidélité à la source. |
+| **Avertissement natif vs erreur applicative** | Un message sans préfixe de logger structuré (`libgssapi_krb5`) provient d'une bibliothèque native, pas du code .NET — à diagnostiquer différemment d'une exception classique. |
+| **Échec attendu sur base neuve** | Le premier `SELECT __EFMigrationsHistory` échoue systématiquement avant la toute première migration — normal, pas à confondre avec une vraie panne de connexion. |
+| **Méthode stabilisée** | 8 services migrés consécutifs sans bug de structure (Secret/ConfigMap/Deployment/Service) — seuls les patterns spécifiques à chaque service demandent encore une adaptation. |
+
+---
+
 ## Dette technique identifiée — à traiter dans une session future
 
 **Sujet :** le script `docker-entrypoint-initdb.d/01-init-db.sh` (création des 4 bases) reste, pour l'instant, couplé au cycle de vie du conteneur Postgres — exactement le même anti-pattern que le Bug 5 de la Phase 1 Docker (migrations EF Core exécutées via `HostedService` plutôt qu'un `Job` séparé), mais à l'étage "création de base" plutôt que "création de tables".
@@ -685,10 +730,11 @@ basket-api → eshop.local/identity → identity-api (même issuer)
 | order-processor Deployment | ✅ |
 | basket-api Deployment | ✅ |
 | payment-processor Deployment | ✅ |
+| webhooks-api Deployment | ✅ |
 | Autres services | ❌ |
 
 ---
 
 ## 🔜 Prochaine étape
 
-Service restant à choisir parmi : `webhooks-api`, `webhook-client`, ou `webapp` (le frontend, le plus complexe — dépend de `catalog-api`, `ordering-api`, `basket-api`, `identity-api`, tous déjà disponibles). Reste à surveiller la duplication des secrets identifiée comme dette technique (Étape 3, Bug 1) — à traiter si le nombre de services dupliquant les mêmes identifiants Postgres/RabbitMQ devient trop important à maintenir manuellement.
+`webhook-client` et `webapp` — les deux frontends Blazor restants, dépendant de la quasi-totalité des services déjà migrés (`identity-api`, `catalog-api`, `ordering-api`, `basket-api`). Derniers composants à migrer pour une stack eShop complète sur K3s. Reste à surveiller la duplication des secrets identifiée comme dette technique (Étape 3, Bug 1) — à traiter si le nombre de services dupliquant les mêmes identifiants Postgres/RabbitMQ devient trop important à maintenir manuellement.
