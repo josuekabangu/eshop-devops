@@ -1,0 +1,52 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: webhooks-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: webhooks-api
+  template:
+    metadata:
+      labels:
+        app: webhooks-api
+    spec:
+      containers:
+        - name: webhooks-api
+          image: localhost:5000/webhooks-api:latest
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: webhooks-api-config
+          env:
+            - name: ConnectionStrings__webhooksdb
+              valueFrom:
+                secretKeyRef:
+                  name: webhooks-api-secrets
+                  key: ConnectionStrings__webhooksdb
+            - name: ConnectionStrings__eventbus
+              valueFrom:
+                secretKeyRef:
+                  name: webhooks-api-secrets
+                  key: ConnectionStrings__eventbus
+          readinessProbe:
+            tcpSocket:
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            tcpSocket:
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
