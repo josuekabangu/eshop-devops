@@ -140,9 +140,12 @@ kubectl apply -f k8s/catalog-api.yaml
 | `rabbitmq/rabbitmq-statefulset.yaml` | ✅ Validé | RabbitMQ — StatefulSet + PVC (identité de nœud liée au hostname) |
 | `identity-api/identity-deployment.yaml` | ✅ Validé | Duende IdentityServer — double Service (ClusterIP interne + NodePort externe) |
 | `catalog-api/catalog-deployment.yaml` | ✅ Validé | Catalog API — Deployment stateless, premier service applicatif |
-| `basket-api.yaml` | ❌ | Basket API |
+| `basket-api/basket-deployment.yaml` | ✅ Validé | Basket API — gRPC + Redis |
 | `ordering-api/ordering-deployment.yaml` | ✅ Validé | Ordering API — premier service migré sans aucun bug |
-| `order-processor.yaml` | ❌ | Worker en arrière-plan, sans Service (pas de port exposé) |
+| `order-processor/order-processor-deployment.yaml` | ✅ Validé | Worker en arrière-plan, sans Service (pas de port exposé) |
+| `payment-processor/payment-processor-deployment.yaml` | ✅ Validé | Worker en arrière-plan, sans Service, Secret dédié (RabbitMQ uniquement) |
+| `webhooks-api.yaml` | ❌ | Webhooks API |
+| `webhook-client.yaml` | ❌ | Blazor OAuth2 client |
 | `webapp.yaml` | ❌ | Blazor WebApp (BFF) |
 | `migrations-job.yaml` | ❌ | Job EF Core (Bug 5 Phase 1 Docker) |
 | `ingress.yaml` | ❌ | Traefik — `eshop.local` |
@@ -552,6 +555,48 @@ Aucun bug rencontré — les erreurs de nommage, de casse YAML, et de gestion de
 
 ---
 
+## Étape 6 — `order-processor`, `basket-api` & `payment-processor`
+
+### `order-processor` — worker sans Service
+
+`OrderProcessor` scanne périodiquement la base (`SELECT ... FROM ordering.orders WHERE ...`) et agit de façon autonome, sans jamais recevoir d'appel entrant d'un autre composant. Un `Service` Kubernetes n'a de raison d'être que pour donner une adresse stable à un composant **appelé** par d'autres — inutile ici. Décision prise par raisonnement avant l'écriture du manifest, pas découverte après un déploiement raté.
+
+Réutilise le `Secret ordering-api-secrets` existant (mêmes connexions Postgres/RabbitMQ) plutôt que d'en dupliquer un identique — réponse partielle à la dette notée à l'Étape 3.
+
+**Absence de probes :** sans port surveillé, K8s considère le Pod `Ready` dès que le conteneur démarre. Dette notée : un blocage silencieux du worker (ex: connexion RabbitMQ zombie sans crash du process) ne serait pas détecté.
+
+Validé : `1/1 Running`, connexion RabbitMQ démarrée, scan périodique des commandes `Submitted` fonctionnel (logs identiques à la Phase 1 Docker Compose).
+
+### `basket-api` — gRPC + Redis
+
+`Basket.API` expose un service **gRPC** (HTTP/2) — sans impact sur la structure du manifest : un `Service` Kubernetes route au niveau TCP, sans distinction native entre HTTP/1.1 et HTTP/2. Point à anticiper pour une future étape Ingress : si `basket-api` devait être exposé via `Ingress`, celui-ci devrait explicitement supporter HTTP/2 (Traefik le fait nativement).
+
+**Bug rencontré — mismatch de mot de passe Redis :**
+Symptôme potentiel (détecté avant impact réel, la connexion Redis de StackExchange.Redis étant lazy) : `basket-api-secret.yaml` déclarait `ConnectionStrings__redis: "redis:6379,password=changeme"`, alors que `redis-secret.yaml` (Étape 2) avait `REDIS_PASSWORD` encodé en base64 pour `password`, pas `changeme`.
+Diagnostic concluant : `kubectl exec -it redis-0 -- redis-cli -a changeme ping` → `WRONGPASS invalid username-password pair`.
+Décision : réaligner les deux fichiers sur `changeme` (cohérent avec `REDIS_PASSWORD` dans `.env.example`), en réappliquant le Secret **et** en forçant `kubectl rollout restart` sur `redis` (StatefulSet) et `basket-api` (Deployment) — rappel de la leçon de l'Étape 3 : modifier un Secret ne relance jamais automatiquement les Pods qui le consomment.
+Validé après correction : `redis-cli -a changeme ping` → `PONG`, `basket-api` `1/1 Running`.
+
+**Point de validation notable :** aucune erreur gRPC `Unauthenticated` (celle qui affectait la Phase 1 Docker Compose à cause du double issuer sur `identity-api`) — confirmation indirecte que le fix `IssuerUri` de l'Étape 4 tient à travers un environnement d'exécution entièrement différent (K3s vs Docker Compose). Validation partielle cependant : aucun appel gRPC réel n'a encore été émis vers `basket-api` dans ce nouvel environnement (`webapp` pas encore migré).
+
+### `payment-processor` — même pattern qu'`order-processor`
+
+Worker sans `Service`, sans probes. Contrairement à `order-processor`, utilise un **Secret dédié** (`payment-processor-secrets`) plutôt qu'une réutilisation — ce service ne touche que RabbitMQ, pas Postgres, donc aucun Secret existant à partager. `ConnectionStrings__EventBus` en PascalCase, fidèle à la casse exacte du `docker-compose.yml` d'origine (différente de `ConnectionStrings__eventbus` ailleurs — vérifié avant de considérer ça comme une incohérence).
+
+Validé : `1/1 Running`, connexion RabbitMQ démarrée.
+
+### Piliers consolidés durant cette étape
+
+| Concept | Application concrète |
+|---|---|
+| **Service = uniquement pour ce qui reçoit du trafic** | Confirmé en pratique avec `order-processor`/`payment-processor` : décision prise par raisonnement avant l'écriture du manifest. |
+| **Réduction de duplication des Secrets, avec discernement** | `order-processor` réutilise `ordering-api-secrets` (mêmes dépendances qu'`ordering-api`) ; `payment-processor` a son propre Secret (dépendances différentes) — la réutilisation n'est pas systématique, elle dépend de ce qui est réellement partagé. |
+| **Le protocole applicatif (gRPC) est transparent pour le Service K8s** | Un `Service` route au niveau TCP, sans connaissance de HTTP/1.1 vs HTTP/2 — seule une future couche Ingress devra en tenir compte explicitement. |
+| **Un Secret modifié ne relance jamais les Pods automatiquement** | 2ᵉ occurrence de cette leçon (après l'Étape 3) — `kubectl rollout restart` reste un réflexe obligatoire après toute modification de Secret/ConfigMap consommé en variable d'environnement. |
+| **Un fix de cause racine tient à travers un changement d'environnement** | Le correctif `IssuerUri` (Phase 1 Docker Compose) continue de fonctionner sans modification sur K3s — preuve que c'était une correction structurelle, pas un contournement local. |
+
+---
+
 ## Dette technique identifiée — à traiter dans une session future
 
 **Sujet :** le script `docker-entrypoint-initdb.d/01-init-db.sh` (création des 4 bases) reste, pour l'instant, couplé au cycle de vie du conteneur Postgres — exactement le même anti-pattern que le Bug 5 de la Phase 1 Docker (migrations EF Core exécutées via `HostedService` plutôt qu'un `Job` séparé), mais à l'étage "création de base" plutôt que "création de tables".
@@ -637,10 +682,13 @@ basket-api → eshop.local/identity → identity-api (même issuer)
 | catalog-api Deployment | ✅ |
 | identity-api Deployment | ✅ |
 | ordering-api Deployment | ✅ |
+| order-processor Deployment | ✅ |
+| basket-api Deployment | ✅ |
+| payment-processor Deployment | ✅ |
 | Autres services | ❌ |
 
 ---
 
 ## 🔜 Prochaine étape
 
-`OrderProcessor` (worker en arrière-plan, sans port exposé, donc sans `Service` associé — décision confirmée par raisonnement plutôt que par essai-erreur). Réutilisation probable du `Secret ordering-api-secrets` existant, puisque ce worker partage les mêmes connexions Postgres/RabbitMQ. Reste à surveiller la duplication des secrets identifiée comme dette technique (Étape 3, Bug 1) — à traiter si le nombre de services dupliquant les mêmes identifiants Postgres/RabbitMQ devient trop important à maintenir manuellement.
+Service restant à choisir parmi : `webhooks-api`, `webhook-client`, ou `webapp` (le frontend, le plus complexe — dépend de `catalog-api`, `ordering-api`, `basket-api`, `identity-api`, tous déjà disponibles). Reste à surveiller la duplication des secrets identifiée comme dette technique (Étape 3, Bug 1) — à traiter si le nombre de services dupliquant les mêmes identifiants Postgres/RabbitMQ devient trop important à maintenir manuellement.
