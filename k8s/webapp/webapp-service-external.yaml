@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: webapp-external
+spec:
+  selector:
+    app: webapp
+  ports:
+    - port: 5100
+      targetPort: 8080
+      nodePort: 5100
+  type: NodePort

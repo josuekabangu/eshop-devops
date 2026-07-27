@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: webapp-config
+data:
+  IdentityUrl: "http://192.168.56.11:5223"
+  CallBackUrl: "http://192.168.56.11:5100"
+  services__catalog-api__http__0: "http://catalog-api:8080"
+  services__ordering-api__http__0: "http://ordering-api:8080"
+  services__basket-api__http__0: "http://basket-api:8080"
