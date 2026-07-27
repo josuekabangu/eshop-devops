@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: identity-api-config 
+data:
+  IdentityServer__IssuerUri: "http://192.168.56.11:5223"
+  WebAppClient: "http://192.168.56.11:5100"
+  WebhooksWebClient: "http://192.168.56.11:5114"
+  BasketApiClient: "http://192.168.56.11:5103"
+  OrderingApiClient: "http://192.168.56.11:5104"
+  WebhooksApiClient: "http://192.168.56.11:5110"
