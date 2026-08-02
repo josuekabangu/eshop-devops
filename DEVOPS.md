@@ -2,7 +2,7 @@
 
 **Josué Kabangu** — DevOps Engineer en apprentissage | Phase 1 (2026)
 
-Application de référence Microsoft [dotnet/eShop](https://github.com/dotnet/eShop) — 12 microservices .NET — conteneurisée et déployée avec Docker, Kubernetes, Terraform et GitLab CI/CD.
+Application de référence Microsoft [dotnet/eShop](https://github.com/dotnet/eShop) — 12 microservices .NET — conteneurisée et déployée avec Docker, Kubernetes, GitHub Actions et (à venir) Terraform.
 
 ---
 
@@ -13,6 +13,8 @@ Application de référence Microsoft [dotnet/eShop](https://github.com/dotnet/eS
 | [docker/DOCKER.md](docker/DOCKER.md) | Dockerfiles, docker-compose, 10 bugs résolus, quick start |
 | [src/ESHOP.md](src/ESHOP.md) | Architecture applicative, 12 services, patches OAuth2 |
 | [k8s/MANIFEST.md](k8s/MANIFEST.md) | k3s, registre local, manifests Kubernetes |
+| [registry/REGISTRY.md](registry/REGISTRY.md) | Registre Docker local (registry:2 + UI) |
+| [.github/CI.md](.github/CI.md) | Pipeline GitHub Actions, bascule vers ghcr.io |
 
 ---
 
@@ -22,9 +24,9 @@ Application de référence Microsoft [dotnet/eShop](https://github.com/dotnet/eS
 |-------|------|--------|
 | Vagrant + VirtualBox | VM de développement — infrastructure immuable | ✅ Ph1 |
 | Docker + Compose | Conteneurisation + orchestration locale | ✅ Ph1 |
-| k3s | Kubernetes léger sur VM | 🔄 Ph1 |
+| k3s | Kubernetes léger sur VM — 12 composants validés bout en bout | ✅ Ph1 |
+| GitHub Actions | Build + push automatique des 9 images vers ghcr.io | 🔄 Ph2 |
 | Terraform | Infrastructure as Code cloud | ❌ Ph2 |
-| GitLab CI/CD | Pipeline automatisé | ❌ Ph2 |
 
 ---
 
@@ -47,6 +49,6 @@ Application de référence Microsoft [dotnet/eShop](https://github.com/dotnet/eS
 | Phase | Objectif | Outils | Statut |
 |-------|----------|--------|--------|
 | Ph1 — Docker | 9 microservices + docker-compose | Docker, Vagrant | ✅ |
-| Ph1 — K8s | Déployer sur k3s local | k3s, kubectl | 🔄 |
+| Ph1 — K8s | Déployer sur k3s local | k3s, kubectl | ✅ |
+| Ph2 — CI/CD | Build + push automatique des images | GitHub Actions, ghcr.io | 🔄 |
 | Ph2 — IaC | Provisionner le cloud | Terraform, Azure | ❌ |
-| Ph2 — CI/CD | Pipeline build → test → deploy | GitLab CI/CD | ❌ |
