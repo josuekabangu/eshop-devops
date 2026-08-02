@@ -12,13 +12,9 @@ spec:
       labels:
         app: catalog-api
     spec:
-      template:
-        spec:
-          imagePullSecrets:
-            - name: ghcr-secret 
       containers:
         - name: catalog-api
-          image: ghcr.io/<ton-username>/catalog-api:latest
+          image: ghcr.io/josuekabangu/catalog-api:latest
           ports:
             - containerPort: 8080
           env:
