@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
         - name: webhooks-api
-          image: localhost:5000/webhooks-api:latest
+          image: ghcr.io/josuekabangu/webhooks-api:latest
           ports:
             - containerPort: 8080
           envFrom:

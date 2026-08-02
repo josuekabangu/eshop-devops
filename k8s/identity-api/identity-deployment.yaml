@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
         - name: identity-api
-          image: localhost:5000/identity-api:latest
+          image: ghcr.io/josuekabangu/identity-api:latest
           ports:
             - containerPort: 8080
           envFrom:

@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
         - name: order-processor
-          image: localhost:5000/order-processor:latest
+          image: ghcr.io/josuekabangu/order-processor:latest
           env:
             - name: ConnectionStrings__orderingdb
               valueFrom:

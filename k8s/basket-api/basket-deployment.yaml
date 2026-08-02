@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
         - name: basket-api
-          image: localhost:5000/basket-api:latest
+          image: ghcr.io/josuekabangu/basket-api:latest
           ports:
             - containerPort: 8080
           envFrom:

@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
         - name: ordering-api
-          image: localhost:5000/ordering-api:latest
+          image: ghcr.io/josuekabangu/ordering-api:latest
           ports:
             - containerPort: 8080
           envFrom:

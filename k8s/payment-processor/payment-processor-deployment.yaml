@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
         - name: payment-processor
-          image: localhost:5000/payment-processor:latest
+          image: ghcr.io/josuekabangu/payment-processor:latest
           env:
             - name: ConnectionStrings__EventBus
               valueFrom:
