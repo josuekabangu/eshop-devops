@@ -407,24 +407,80 @@ curl -s -o /dev/null -w "%{http_code}\n" http://192.168.56.11:5114
 
 ---
 
+## Charts 10 à 12 — `order-processor`, `payment-processor` & `webapp` (achèvement complet)
+
+Trois derniers composants convertis, complétant l'intégralité de la stack eShop (12 composants) en charts Helm indépendants.
+
+### `order-processor` & `payment-processor` — choix de conception assumé : Secret dédié plutôt que partagé
+
+Contrairement au manifest K8s brut (où `order-processor` réutilisait littéralement `ordering-api-secrets`), chaque chart Helm possède **son propre Secret**. Décision cohérente avec le choix initial "un chart par service" : chaque chart doit rester **installable de façon autonome**, sans dépendre qu'un autre chart ait préalablement créé un objet partagé.
+
+Templates Secret et Deployment identiques dans leur structure aux workers précédents — pas de `ports:`, pas de `Service`, pas de probes, cohérent avec l'absence de trafic entrant à recevoir. Incohérence de casse conservée par fidélité : `ConnectionStrings__EventBus` (majuscules) sur `payment-processor`, différent de `ConnectionStrings__eventbus` ailleurs — sans impact fonctionnel, documenté depuis l'étape K8s brute, non "corrigé" arbitrairement.
+
+Résultat : les deux workers passent en `1/1 Running` en 2-3 secondes, connexions RabbitMQ/Postgres confirmées dans les logs. **Aucun bug.**
+
+### `webapp` — dernier composant, le plus richement connecté
+
+Dépendances : RabbitMQ (Secret) + Identity (externe, navigateur) + Catalog/Ordering/Basket (internes, ConfigMap) — le service orchestrant le plus de connexions simultanées de toute la stack.
+
+Séparation interne/externe appliquée cohéremment une nouvelle fois : `IdentityUrl`/`CallBackUrl` résolues côté navigateur, `services__*__http__0` résolues côté serveur — pattern confirmé sur cinq services distincts au cours de cette migration Helm complète. Deux `Service` (interne + NodePort externe), structure identique à `identity-api`.
+
+Résultat : `1/1 Running` en 15 secondes. Validation externe :
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" http://192.168.56.11:5100
+# 200
+```
+**Aucun bug.**
+
+---
+
+## 🏆 Bilan complet — les 12 composants d'eShop convertis en Helm
+
+| Composant | Type Helm | Bugs rencontrés | Étape doc |
+|---|---|---|---|
+| `postgres` | StatefulSet | 2 (accès direct nil, boucle silencieuse) | 1 |
+| `rabbitmq` | StatefulSet | 2 (Secret non encodé, probe mal référencée) | 2 |
+| `redis` | StatefulSet | 1 vigilance + 1 bug (probe vide) | 3 |
+| `catalog-api` | Deployment | 0 | Pilote |
+| `identity-api` | Deployment + 2 Services | 2 (image doublée, port manquant) | 4 |
+| `ordering-api` | Deployment | 0 | 5 |
+| `basket-api` | Deployment | 0 (vigilance proactive) | 5 |
+| `webhooks-api` | Deployment | 0 | 5 |
+| `webhook-client` | Deployment + Service | 0 | 5 |
+| `order-processor` | Deployment sans Service | 0 | 6 |
+| `payment-processor` | Deployment sans Service | 0 | 6 |
+| `webapp` | Deployment + 2 Services | 0 | 6 |
+
+**12/12 composants**, `kubectl apply -f k8s/*` intégralement remplacé par `helm install`/`helm upgrade` pour chacun.
+
+**Progression de la maîtrise méthodologique visible dans les chiffres :** les deux premiers services convertis (`postgres`, `identity-api`, hors le pilote `catalog-api`) ont chacun révélé 2 bugs distincts ; les sept services suivants ont tous été déployés sans aucun bug — confirmation directe que la discipline de vérification systématique (`helm lint` → `helm template` → relecture ligne par ligne → déploiement) s'est intégrée comme réflexe plutôt que comme contrainte externe.
+
+---
+
+## Piliers consolidés sur l'ensemble de la migration Helm
+
+| Concept | Application transversale |
+|---|---|
+| **Résolution structurelle du problème `${VAR}`** | Chaque chart Helm remplace des dizaines de valeurs figées ou de variables non substituées par un templating réellement exécuté — fondement de toute cette migration. |
+| **Trois variantes distinctes d'échec de valeur manquante** | Erreur bruyante (accès direct), échec silencieux total (boucle vide), rendu incomplet mais invalide seulement à l'application (champ vide) — chacune nécessitant une vigilance de détection différente. |
+| **Persistance des données indépendante du cycle de vie Helm** | Confirmée systématiquement sur les 3 StatefulSets — `helm install`/`uninstall` répétés ne recréent jamais un volume existant. |
+| **Synchronisation par valeur unique** | Pattern répété avec succès sur `identity-api` (IssuerUri ↔ NodePort) et `webhook-client`/`webapp` (CallBackUrl ↔ NodePort) — élimine par construction un risque de désynchronisation manuelle déjà coûteux en Phase K8s brute. |
+| **La conversion en charts séparés n'élimine pas la duplication de secrets, elle exige une vigilance active** | Confirmé positivement sur `basket-api` : la vérification proactive du mot de passe Redis avant toute création de fichier a directement empêché une récidive du bug `NOAUTH`. |
+| **Autonomie de chaque chart comme choix de conception** | Duplication volontaire de Secrets entre `order-processor` et `ordering-api` (plutôt que réutilisation) — cohérent avec le principe qu'un chart doit pouvoir s'installer seul, sans dépendance implicite envers un autre chart. |
+
+---
+
 ## Progression
 
 | Chart | Statut |
 |-------|--------|
-| `catalog-api` (Deployment) | ✅ Validé |
-| `postgres` (StatefulSet) | ✅ Validé |
-| `rabbitmq` (StatefulSet) | ✅ Validé |
-| `redis` (StatefulSet) | ✅ Validé |
-| **Les 3 StatefulSets de la stack** | ✅ Tous convertis |
-| `identity-api` (Deployment) | ✅ Validé |
-| `ordering-api`, `basket-api`, `webhooks-api`, `webhook-client` | ✅ Validés |
-| Autres services applicatifs (3 restants : `order-processor`, `payment-processor`, `webapp`) | ❌ |
+| **Les 12 composants d'eShop** | ✅ Tous convertis en charts Helm indépendants |
 
 ---
 
-## 🔜 Prochaine étape
+## 🔜 Prochaine étape naturelle
 
-`order-processor` et `payment-processor` (workers sans Service), puis `webapp` (le service le plus richement connecté, dernier de la stack) — pour compléter la conversion intégrale des 12 composants d'eShop en charts Helm.
+Avec la CI (GitHub Actions + GHCR) et Helm désormais tous deux en place, la suite logique du parcours DevOps est **ArgoCD** — synchronisation GitOps automatique entre ce dépôt Git (contenant maintenant les 12 charts) et l'état réel du cluster K3s, remplaçant les `helm install`/`upgrade` manuels par une réconciliation continue.
 
 ---
 

@@ -15,7 +15,7 @@ Application de référence Microsoft [dotnet/eShop](https://github.com/dotnet/eS
 | [k8s/MANIFEST.md](k8s/MANIFEST.md) | k3s, registre local, manifests Kubernetes |
 | [registry/REGISTRY.md](registry/REGISTRY.md) | Registre Docker local (registry:2 + UI) |
 | [.github/CI.md](.github/CI.md) | Pipeline GitHub Actions, bascule vers ghcr.io |
-| [helm/HELM.md](helm/HELM.md) | Conversion manifests bruts → charts Helm, service par service |
+| [helm/HELM.md](helm/HELM.md) | Conversion manifests bruts → charts Helm — 12/12 composants |
 
 ---
 
@@ -27,7 +27,7 @@ Application de référence Microsoft [dotnet/eShop](https://github.com/dotnet/eS
 | Docker + Compose | Conteneurisation + orchestration locale | ✅ Ph1 |
 | k3s | Kubernetes léger sur VM — 12 composants validés bout en bout | ✅ Ph1 |
 | GitHub Actions | Build + push automatique des 9 images vers ghcr.io | 🔄 Ph2 |
-| Helm | Charts par service (catalog-api, postgres validés) | 🔄 Ph2 |
+| Helm | Charts par service — 12/12 composants convertis | ✅ Ph2 |
 | Terraform | Infrastructure as Code cloud | ❌ Ph2 |
 
 ---
