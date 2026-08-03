@@ -1,0 +1,36 @@
+image:
+  repository: ghcr.io/josuekabangu/catalog-api
+  tag: latest 
+
+replicaCount: 2
+
+postgres:
+  host: postgres
+  port: 5432
+  database: catalogdb
+  username: postgres
+  password: Changeme 
+
+rabbitmq:
+  host: rabbitmq
+  port: 5672
+  username: eshop_rabbit 
+  password: password
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi 
+  limits:
+    cpu: 500m 
+    memory: 512Mi 
+
+probes:
+  readiness: 
+    initialDelaySeconds: 10
+    periodSeconds: 10 
+    timeoutSeconds: 5
+    failureThreshold: 6
+  liveness: 
+    initialDelaySeconds: 30
+    periodSeconds: 20 
