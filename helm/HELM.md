@@ -154,7 +154,7 @@ helm/rabbitmq/
     └── statefulset.yaml
 ```
 
-⚠️ Point de cohérence à noter (pas un bug bloquant) : `secret.yaml` et `service.yaml` utilisent `name: rabbitmq`/`app: rabbitmq` en dur, alors que `statefulset.yaml` référence `{{ .Release.Name }}-secret` et `{{ .Release.Name }}`. Fonctionne tel quel puisque la release s'appelle `rabbitmq`, mais contrairement à `catalog-api`/`postgres` qui templatent partout, ce chart ne suivrait pas un renommage de release.
+~~Point de cohérence noté~~ (corrigé depuis) : `secret.yaml`/`service.yaml` utilisaient `name: rabbitmq`/`app: rabbitmq` en dur — templaté en `{{ .Release.Name }}` partout, cohérent avec `catalog-api`/`postgres`. `storage: 1Gi` également templaté en `{{ .Values.storage.size }}`.
 
 ### Bugs rencontrés et corrigés
 
@@ -191,6 +191,84 @@ helm install rabbitmq helm/rabbitmq/
 
 ---
 
+## Chart 4 — `redis` (`StatefulSet`, dernier de la stack)
+
+**Particularité propre à Redis :** le mot de passe s'injecte en **argument de ligne de commande** (`--requirepass`), pas seulement en variable d'environnement passive — deux mécanismes de substitution distincts coexistent dans le même fichier :
+
+| Endroit | Syntaxe | Résolu par | Quand |
+|---|---|---|---|
+| `command:`/`args:` | `$(REDIS_PASSWORD)` | Kubernetes, nativement | Au démarrage du conteneur, à partir des `env:` |
+| Probes (`exec.command`) | `sh -c "redis-cli -a \"$REDIS_PASSWORD\" ping"` | Le shell du conteneur | À chaque exécution de la probe |
+| Tout le reste du template | `{{ .Values.x }}` | Helm | Au rendu, avant tout envoi à l'API |
+
+Helm résout ses `{{ }}` en premier, produisant un YAML final qui contient encore `$(REDIS_PASSWORD)` **littéral** — cette syntaxe n'est volontairement pas touchée par Helm, elle attend sa résolution par Kubernetes au runtime.
+
+```
+helm/redis/
+├── Chart.yaml
+├── values.yaml
+└── templates/
+    ├── secret.yaml
+    ├── service.yaml
+    └── statefulset.yaml
+```
+
+### Point de vigilance 1 — risque de récidive du mismatch mot de passe Redis, évité avant déploiement
+
+Première version de `values.yaml` : `redis.password: Changeme` (majuscule) — aurait divergé de `basket-api-secrets` (`password=changeme`, minuscule), reproduction quasi exacte du bug `NOAUTH` déjà diagnostiqué et corrigé lors de la migration K8s (Étape 6/8). Détecté **avant** déploiement par vérification proactive :
+```bash
+kubectl get secret basket-api-secrets -o jsonpath='{.data.ConnectionStrings__redis}' | base64 -d
+```
+Fix : alignement sur `changeme`.
+
+**Principe le plus important de toute la conversion Helm :** convertir des composants vers des charts **séparés** ne supprime jamais la duplication de secrets entre eux — elle peut même en **introduire de nouvelles** au moment de la conversion, si la valeur n'est pas vérifiée contre ce que les consommateurs existants attendent réellement. Seul un chart unique ou un gestionnaire de secrets externe éliminerait structurellement ce risque.
+
+### Point de vigilance 2 — champs de probe vides (3ᵉ variante d'échec de valeur manquante)
+
+Rendu affichant `timeoutSeconds:` et `failureThreshold:` sans valeur — clés présentes dans `values.yaml` mais laissées vides, plutôt qu'absentes. Fix : valeurs complétées.
+
+Trois variantes distinctes de valeur manquante rencontrées sur ce parcours Helm, chacune avec un comportement différent :
+
+| Type d'absence | Comportement | Exemple |
+|---|---|---|
+| Clé totalement absente, accès direct | Erreur bruyante immédiate | `postgres` — `nil pointer` |
+| Liste absente, utilisée dans `{{ range }}` | Échec silencieux, zéro itération | `postgres` — ConfigMap vide |
+| Clé présente mais valeur vide | Rendu incomplet, invalide seulement à l'application réelle | `redis` — probe avec champs vides |
+
+### Validation
+
+```bash
+kubectl delete -f k8s/redis/
+helm install redis helm/redis/
+```
+`STATUS: deployed`, `redis-0` `1/1 Running`.
+
+**Persistance :** `kubectl get pvc` → `data-redis-0` conservé, `AGE: 7d`.
+```bash
+kubectl logs redis-0
+# RDB age 607992 seconds   (~7 jours — confirme le chargement des données préexistantes, pas un état neuf)
+# Ready to accept connections tcp
+```
+
+**Vérification croisée — absence de régression d'authentification :**
+```bash
+kubectl logs -l app=basket-api --tail=20 | grep -i "noauth\|authenticationfailure"
+# (vide)
+```
+Confirmation qu'aucun service consommateur n'a rencontré d'échec d'authentification suite à la bascule — la vigilance sur le mot de passe a porté ses fruits.
+
+---
+
+## Bilan — les 3 StatefulSets de la stack convertis en Helm
+
+| Chart | Bugs rencontrés | Validation |
+|---|---|---|
+| `postgres` | `nil pointer` (accès direct), `range` silencieux (liste absente), `POSTGRES_USER` non templaté | Données préservées, 4 bases confirmées |
+| `rabbitmq` | Secret non encodé (`data` sans `b64enc`), probe mal référencée (`periodSeconds`/`timeoutSeconds`) | 8 authentifications applicatives réussies |
+| `redis` | Risque de mot de passe divergent (évité), probe avec champs vides | Données AOF/RDB préservées, aucune régression |
+
+---
+
 ## Piliers consolidés
 
 | Concept | Application |
@@ -200,7 +278,9 @@ helm install rabbitmq helm/rabbitmq/
 | **Un seul gestionnaire d'orchestration par objet** | Ne jamais laisser `kubectl apply` et Helm gérer le même objet nommé — Helm garde un état interne (Secret de release) qui se désynchronise sinon. |
 | **`helm upgrade`/`rollback` comme filet de sécurité** | Historique de révisions consultable et réversible, absent avec des `kubectl apply` bruts successifs. |
 | **Persistance des PVC indépendante du cycle de vie Helm** | `volumeClaimTemplates` échappe à la gestion directe de Helm — comportement à connaître pour ne pas le confondre avec un bug. |
-| **Deux modes d'échec différents en Helm** | Accès direct sur valeur manquante = erreur bruyante immédiate. Boucle `{{ range }}` sur valeur manquante = échec silencieux, zéro itération sans avertissement. Référence à une mauvaise clé existante = sortie plausible mais fausse, sans erreur du tout. |
+| **Trois variantes distinctes d'échec de valeur manquante** | Accès direct sur clé absente = erreur bruyante immédiate. Boucle `{{ range }}` sur liste absente = échec silencieux, zéro itération. Clé présente mais valeur vide = rendu incomplet, invalide seulement à l'application réelle. Aucune des trois n'est détectée de la même façon — la relecture complète du rendu reste la seule protection fiable contre les trois. |
+| **Coexistence de deux moteurs de templating** | `{{ }}` (Helm, résolu au rendu) et `$(VAR)` (Kubernetes natif, résolu au runtime dans `command:`) peuvent apparaître dans le même fichier sans conflit, à condition de ne jamais les confondre — Helm ne touche jamais la syntaxe `$(VAR)`. |
+| **La conversion en charts séparés n'élimine pas la duplication de secrets, elle peut même en réintroduire** | Confirmé concrètement sur `redis` — chaque nouvelle conversion doit vérifier activement sa cohérence avec les consommateurs existants, pas seulement sa propre validité interne. |
 | **Vérification du contenu généré, pas seulement de l'absence d'erreur** | La relecture du YAML produit par `helm template` reste indispensable, en particulier autour de toute logique conditionnelle, de boucle, ou de référence à une clé `values.yaml`. |
 | **Transparence d'une bascule bien menée** | Les services consommateurs (via le `Service` DNS) n'ont subi aucune interruption — la migration d'un composant vers Helm n'affecte pas ses consommateurs tant que le contrat d'interface (nom du Service, port) reste stable. |
 
@@ -213,14 +293,15 @@ helm install rabbitmq helm/rabbitmq/
 | `catalog-api` (Deployment) | ✅ Validé |
 | `postgres` (StatefulSet) | ✅ Validé |
 | `rabbitmq` (StatefulSet) | ✅ Validé |
-| `redis` (StatefulSet) | ❌ |
-| Autres services applicatifs | ❌ |
+| `redis` (StatefulSet) | ✅ Validé |
+| **Les 3 StatefulSets de la stack** | ✅ Tous convertis |
+| Autres services applicatifs (8 restants) | ❌ |
 
 ---
 
 ## 🔜 Prochaine étape
 
-`redis` (dernier StatefulSet de la stack) ou un service applicatif supplémentaire — décision à prendre selon la préférence de continuer sur la famille StatefulSet ou de diversifier vers les Deployments applicatifs restants.
+Passage aux 8 services applicatifs restants (`identity-api`, `ordering-api`, `basket-api`, `payment-processor`, `webhooks-api`, `webhook-client`, `webapp`, `order-processor`) — tous des `Deployment`, structurellement plus simples que les StatefulSets, mais chacun avec ses propres dépendances croisées à vérifier (Identity, event bus, Redis) au moment de la conversion.
 
 ---
 
