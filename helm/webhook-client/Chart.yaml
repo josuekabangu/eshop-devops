@@ -1,0 +1,5 @@
+apiVersion: v2
+name: webhook-client
+description: Helm chart for eShop WebhookClient (Blazor)
+version: 0.1.0
+appVersion: "1.0.0"

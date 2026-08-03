@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-config
+data:
+  IdentityUrl: "http://{{ .Values.externalHost }}:{{ .Values.identity.externalPort }}"
+  CallBackUrl: "http://{{ .Values.externalHost }}:{{ .Values.service.externalPort }}"

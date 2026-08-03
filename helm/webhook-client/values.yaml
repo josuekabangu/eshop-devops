@@ -1,0 +1,31 @@
+image:
+  repository: ghcr.io/josuekabangu/webhook-client
+  tag: latest
+
+replicaCount: 1
+
+externalHost: "192.168.56.11"
+
+identity:
+  externalPort: "5223"
+
+service:
+  externalPort: 5114
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+probes:
+  readiness:
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 6
+  liveness:
+    initialDelaySeconds: 30
+    periodSeconds: 20
