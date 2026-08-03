@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-config
+data:
+  IdentityServer__IssuerUri: "http://{{ .Values.externalHost }}:{{ .Values.service.externalPort }}"
+  WebAppClient: "http://{{ .Values.externalHost }}:{{ .Values.clients.webapp }}"
+  WebhooksWebClient: "http://{{ .Values.externalHost }}:{{ .Values.clients.webhooksWeb }}"
+  BasketApiClient: "http://{{ .Values.externalHost }}:{{ .Values.clients.basketApi }}"
+  OrderingApiClient: "http://{{ .Values.externalHost }}:{{ .Values.clients.orderingApi }}"
+  WebhooksApiClient: "http://{{ .Values.externalHost }}:{{ .Values.clients.webhooksApi }}"
