@@ -1,0 +1,14 @@
+# templates/service-external.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-external
+spec:
+  selector:
+    app: {{ .Release.Name }}
+  ports:
+    - port: {{ .Values.service.externalPort }}
+      targetPort: 8080
+      nodePort: {{ .Values.service.externalPort }}
+  type: NodePort
+  

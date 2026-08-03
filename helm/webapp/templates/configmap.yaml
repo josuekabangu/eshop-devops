@@ -1,0 +1,11 @@
+# templates/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-config
+data:
+  IdentityUrl: "http://{{ .Values.externalHost }}:{{ .Values.identity.externalPort }}"
+  CallBackUrl: "http://{{ .Values.externalHost }}:{{ .Values.service.externalPort }}"
+  services__catalog-api__http__0: "{{ .Values.internalServices.catalogApi }}"
+  services__ordering-api__http__0: "{{ .Values.internalServices.orderingApi }}"
+  services__basket-api__http__0: "{{ .Values.internalServices.basketApi }}"

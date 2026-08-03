@@ -1,0 +1,6 @@
+# Chart.yaml
+apiVersion: v2
+name: webapp
+description: Helm chart for eShop WebApp frontend
+version: 0.1.0
+appVersion: "1.0.0"
