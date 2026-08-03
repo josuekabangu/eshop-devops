@@ -1,0 +1,6 @@
+# Chart.yaml
+apiVersion: v2
+name: payment-processor
+description: Helm chart for eShop PaymentProcessor worker
+version: 0.1.0
+appVersion: "1.0.0"

@@ -1,0 +1,27 @@
+# values.yaml
+image:
+  repository: ghcr.io/josuekabangu/order-processor
+  tag: latest
+
+replicaCount: 1
+
+postgres:
+  host: postgres
+  port: 5432
+  database: orderingdb
+  username: postgres
+  password: Changeme
+
+rabbitmq:
+  host: rabbitmq
+  port: 5672
+  username: eshop_rabbit
+  password: password
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    cpu: 250m
+    memory: 256Mi
