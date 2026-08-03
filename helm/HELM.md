@@ -344,6 +344,69 @@ Issuer unique et cohérent, endpoints OAuth/OIDC complets — la conversion Helm
 
 ---
 
+## Charts 6 à 9 — `ordering-api`, `basket-api`, `webhooks-api`, `webhook-client`
+
+Quatre services convertis consécutivement, **tous sans bug de configuration** — confirmation que la méthode de conversion K8s → Helm (établie sur `catalog-api`, affinée sur les StatefulSets et `identity-api`) est désormais pleinement maîtrisée.
+
+### `ordering-api`
+
+Dépendances : Postgres (`orderingdb`) + RabbitMQ + Identity (interne, `http://identity-api:8080`). `identity.url` en valeur en dur, pas construite depuis un `externalHost` — cohérent avec la distinction interne/externe déjà établie : ce service ne parle qu'en interne au cluster. Deployment/Service identiques au pattern `catalog-api`.
+
+Résultat : `1/1 Running` en moins de 2 min, **aucun bug**, migrations EF + connexion RabbitMQ confirmées.
+
+### `basket-api` — la vigilance proactive paie
+
+Dépendances : Redis + RabbitMQ + Identity (interne). Communication gRPC, transparente pour la structure du chart (déjà établi en migration K8s brute).
+
+**Avant toute création de fichier**, vérification proactive de la valeur réelle du mot de passe Redis :
+```bash
+kubectl get secret redis-secret -o jsonpath='{.data.REDIS_PASSWORD}' | base64 -d
+# changeme
+```
+`values.yaml` aligné immédiatement sur cette valeur exacte — réflexe directement issu du bug `NOAUTH` déjà payé lors de la migration K8s brute et re-payé lors de la conversion du chart `redis`.
+
+Résultat : `1/1 Running` en 13s, **zéro `NOAUTH`** confirmé par grep explicite post-déploiement.
+
+### `webhooks-api`
+
+Pattern strictement analogue à `ordering-api` (Postgres `webhooksdb` + RabbitMQ + Identity interne) — seule la base de données et le nom du service changent, aucune nouveauté structurelle.
+
+Résultat : `1/1 Running` en 15s, **aucun bug**, rendu propre du premier coup.
+
+### `webhook-client`
+
+Aucune donnée sensible (uniquement des URLs) → `ConfigMap` seul, pas de `Secret`. Un seul `Service` NodePort — pas de Service interne, rien d'autre dans le cluster n'appelle ce composant browser-facing.
+
+**Point structurel** : `CallBackUrl` référence `{{ .Values.service.externalPort }}`, la même valeur que le `Service` NodePort — même principe de synchronisation par valeur unique déjà appliqué sur `identity-api` (`IssuerUri` ↔ NodePort), désormais un motif réutilisable établi.
+
+Résultat : `1/1 Running` en 14s. Validation externe :
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" http://192.168.56.11:5114
+# 200
+```
+
+### Bilan de ces quatre conversions
+
+| Service | Dépendances | Bugs | Temps de stabilisation |
+|---|---|---|---|
+| `ordering-api` | Postgres, RabbitMQ, Identity | 0 | < 2 min |
+| `basket-api` | Redis, RabbitMQ, Identity | 0 (vigilance proactive) | 13s |
+| `webhooks-api` | Postgres, RabbitMQ, Identity | 0 | 15s |
+| `webhook-client` | Identity, aucune donnée sensible | 0 | 14s |
+
+**Comportement transitoire observé sur les quatre :** chaque ancien Pod (géré par `kubectl` brut) est passé par un état `Completed` transitoire lors de la bascule vers Helm — fin de vie normale d'un `Deployment` supprimé, sans conséquence.
+
+### Piliers consolidés durant cette série
+
+| Concept | Application |
+|---|---|
+| **Maturité méthodologique confirmée** | Quatre conversions consécutives sans bug de templating — la discipline de vérification (`helm lint`/`helm template`/relecture) est désormais un réflexe, pas une étape supplémentaire pénible. |
+| **Vigilance ciblée sur les secrets partagés** | La vérification proactive du mot de passe Redis avant conversion de `basket-api` a directement empêché la récidive d'un bug déjà coûteux — la dette de duplication de secrets entre charts reste réelle, mais gérable par une discipline systématique de vérification croisée. |
+| **Synchronisation par valeur unique, motif réutilisable** | Le pattern `{{ .Values.x.externalPort }}` réutilisé pour un `Service` NodePort et l'URL de callback correspondante, appliqué maintenant sur deux services (`identity-api`, `webhook-client`). |
+| **Transition Pod `Completed` normale** | Un ancien `Deployment` supprimé laisse transitoirement son dernier Pod en `Completed` avant disparition complète — signal normal de fin de cycle de vie, pas un bug. |
+
+---
+
 ## Progression
 
 | Chart | Statut |
@@ -354,13 +417,14 @@ Issuer unique et cohérent, endpoints OAuth/OIDC complets — la conversion Helm
 | `redis` (StatefulSet) | ✅ Validé |
 | **Les 3 StatefulSets de la stack** | ✅ Tous convertis |
 | `identity-api` (Deployment) | ✅ Validé |
-| Autres services applicatifs (7 restants) | ❌ |
+| `ordering-api`, `basket-api`, `webhooks-api`, `webhook-client` | ✅ Validés |
+| Autres services applicatifs (3 restants : `order-processor`, `payment-processor`, `webapp`) | ❌ |
 
 ---
 
 ## 🔜 Prochaine étape
 
-`ordering-api`, `basket-api`, ou `order-processor` — services applicatifs restants, chacun avec ses propres dépendances croisées (Identity, event bus, Redis) à vérifier activement au moment de la conversion, suivant la même discipline de relecture systématique du rendu établie depuis les StatefulSets.
+`order-processor` et `payment-processor` (workers sans Service), puis `webapp` (le service le plus richement connecté, dernier de la stack) — pour compléter la conversion intégrale des 12 composants d'eShop en charts Helm.
 
 ---
 
