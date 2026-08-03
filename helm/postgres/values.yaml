@@ -1,0 +1,14 @@
+image: ankane/pgvector:latest
+
+postgres:
+  user: postgres
+  password: Changeme
+
+storage:
+  size: 2Gi
+
+databases:
+  - catalogdb 
+  - orderingdb 
+  - webhooksdb
+  - identitydb
