@@ -1,11 +1,11 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: rabbitmq
+  name: {{ .Release.Name }}
 spec:
   clusterIP: None          # headless — même raison que pour postgres
   selector:
-    app: rabbitmq
+    app: {{ .Release.Name }}
   ports:
     - name: amqp
       port: 5672
