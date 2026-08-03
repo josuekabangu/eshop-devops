@@ -140,6 +140,57 @@ Après correction du Bug 3 : `helm upgrade postgres helm/postgres/` → `REVISIO
 
 ---
 
+## Chart 3 — `rabbitmq` (`StatefulSet`, plus simple que `postgres`)
+
+**Pourquoi ce service ensuite :** structurellement plus simple que `postgres` — pas de `ConfigMap` (aucun script d'init nécessaire), pas de boucle. Seule particularité : un `Service` exposant deux ports nommés (`amqp`, `management`).
+
+```
+helm/rabbitmq/
+├── Chart.yaml
+├── values.yaml
+└── templates/
+    ├── secret.yaml
+    ├── service.yaml
+    └── statefulset.yaml
+```
+
+⚠️ Point de cohérence à noter (pas un bug bloquant) : `secret.yaml` et `service.yaml` utilisent `name: rabbitmq`/`app: rabbitmq` en dur, alors que `statefulset.yaml` référence `{{ .Release.Name }}-secret` et `{{ .Release.Name }}`. Fonctionne tel quel puisque la release s'appelle `rabbitmq`, mais contrairement à `catalog-api`/`postgres` qui templatent partout, ce chart ne suivrait pas un renommage de release.
+
+### Bugs rencontrés et corrigés
+
+**Bug 1 — Secret déclaré en `data` sans encodage réel**
+Rendu `helm template` révélant `RABBITMQ_DEFAULT_USER: eshop_rabbit` en texte brut sous `data:`, malgré un commentaire suggérant un encodage base64 (`| base64`) jamais réalisé. Root cause : le champ `data:` d'un `Secret` Kubernetes **exige** des valeurs déjà encodées en base64 — contrainte de l'API K8s, pas de Helm. `{{ .Values.x }}` seul ne réalise aucun encodage automatique ; il fallait `stringData` (texte brut, encodage délégué à Kubernetes) ou le filtre Helm `| b64enc` explicite.
+Fix retenu : bascule vers `stringData`, pour rester cohérent avec les charts `postgres`/`catalog-api` déjà écrits plutôt que mélanger deux styles dans le même projet.
+Principe : un commentaire de code documentant une intention non réalisée est un TODO oublié à traiter comme un signal d'alarme — seule la relecture du rendu `helm template` est une vérité vérifiable.
+
+**Bug 2 — `periodSeconds` référençant la mauvaise clé (le plus insidieux)**
+`values.yaml` définissait `periodSeconds: 10` et `timeoutSeconds: 5`, mais le rendu affichait `periodSeconds: 5` — `timeoutSeconds` dupliqué par erreur de copier-coller à la place de `periodSeconds` dans le template.
+Fix : correction de la référence vers `.periodSeconds`.
+Principe : aucune erreur de `helm lint`/`helm template` — une référence à une clé **existante mais incorrecte** est syntaxiquement valide. Plus insidieux que le bug `{{ range }}` vide de `postgres` (zéro itération, absence totale de sortie) : ici la sortie est plausible mais fausse, seule une comparaison ligne à ligne avec `values.yaml` le révèle.
+
+### Validation
+
+```bash
+kubectl delete -f k8s/rabbitmq/
+helm install rabbitmq helm/rabbitmq/
+```
+`STATUS: deployed`, `rabbitmq-0` passe de `0/1` à `1/1 Running` en 18s (cohérent avec `initialDelaySeconds: 10` de la readiness probe).
+
+**Persistance :** `kubectl get pvc` → `data-rabbitmq-0 Bound ... AGE: 7d1h` — volume original conservé.
+
+**Validation applicative — la preuve la plus solide de cette étape :** dans les logs de démarrage, `user 'eshop_rabbit' authenticated and granted access to vhost '/'` répété **8 fois** — chacun des services applicatifs consommateurs (`catalog-api`, `ordering-api`, `basket-api`, etc.) s'est reconnecté avec succès via les identifiants du nouveau Secret généré par Helm. Une authentification échouée sur l'un de ces 8 services aurait immédiatement révélé un problème d'encodage persistant — c'est la confirmation la plus directe possible que le Bug 1 est réellement résolu.
+
+### Piliers consolidés durant cette étape
+
+| Concept | Application |
+|---|---|
+| **`data` vs `stringData` dans un Secret Kubernetes** | `data` exige un encodage base64 réel (filtre Helm `b64enc` si généré dynamiquement) ; `stringData` accepte du texte brut et délègue l'encodage à Kubernetes — choix à faire consciemment. |
+| **Cohérence de style à travers les charts d'un même projet** | Mélanger `data`/`stringData` selon les charts complique la maintenance — un standard choisi une fois doit être appliqué partout. |
+| **Bug de référence syntaxiquement valide mais sémantiquement incorrect** | Un copier-coller référençant la mauvaise clé existante ne déclenche aucune erreur d'outillage — seule la comparaison manuelle du rendu aux valeurs source permet de l'attraper. |
+| **Validation applicative comme preuve la plus forte** | Au-delà de `helm lint`/logs de démarrage, l'authentification réussie de multiples consommateurs externes reste la confirmation la plus fiable qu'une configuration de sécurité fonctionne réellement de bout en bout. |
+
+---
+
 ## Piliers consolidés
 
 | Concept | Application |
@@ -149,8 +200,8 @@ Après correction du Bug 3 : `helm upgrade postgres helm/postgres/` → `REVISIO
 | **Un seul gestionnaire d'orchestration par objet** | Ne jamais laisser `kubectl apply` et Helm gérer le même objet nommé — Helm garde un état interne (Secret de release) qui se désynchronise sinon. |
 | **`helm upgrade`/`rollback` comme filet de sécurité** | Historique de révisions consultable et réversible, absent avec des `kubectl apply` bruts successifs. |
 | **Persistance des PVC indépendante du cycle de vie Helm** | `volumeClaimTemplates` échappe à la gestion directe de Helm — comportement à connaître pour ne pas le confondre avec un bug. |
-| **Deux modes d'échec différents en Helm** | Accès direct sur valeur manquante = erreur bruyante immédiate. Boucle `{{ range }}` sur valeur manquante = échec silencieux, zéro itération sans avertissement. |
-| **Vérification du contenu généré, pas seulement de l'absence d'erreur** | La relecture du YAML produit par `helm template` reste indispensable, en particulier autour de toute logique conditionnelle ou de boucle. |
+| **Deux modes d'échec différents en Helm** | Accès direct sur valeur manquante = erreur bruyante immédiate. Boucle `{{ range }}` sur valeur manquante = échec silencieux, zéro itération sans avertissement. Référence à une mauvaise clé existante = sortie plausible mais fausse, sans erreur du tout. |
+| **Vérification du contenu généré, pas seulement de l'absence d'erreur** | La relecture du YAML produit par `helm template` reste indispensable, en particulier autour de toute logique conditionnelle, de boucle, ou de référence à une clé `values.yaml`. |
 | **Transparence d'une bascule bien menée** | Les services consommateurs (via le `Service` DNS) n'ont subi aucune interruption — la migration d'un composant vers Helm n'affecte pas ses consommateurs tant que le contrat d'interface (nom du Service, port) reste stable. |
 
 ---
@@ -161,14 +212,15 @@ Après correction du Bug 3 : `helm upgrade postgres helm/postgres/` → `REVISIO
 |-------|--------|
 | `catalog-api` (Deployment) | ✅ Validé |
 | `postgres` (StatefulSet) | ✅ Validé |
-| `rabbitmq`, `redis` (StatefulSet) | ❌ |
+| `rabbitmq` (StatefulSet) | ✅ Validé |
+| `redis` (StatefulSet) | ❌ |
 | Autres services applicatifs | ❌ |
 
 ---
 
 ## 🔜 Prochaine étape
 
-Choix à faire entre poursuivre avec `rabbitmq`/`redis` (même famille StatefulSet, pattern déjà maîtrisé) ou passer à un service applicatif supplémentaire (`identity-api`, `ordering-api`...) pour diversifier la pratique sur des `Deployment` avec plus de dépendances (Secret + ConfigMap combinés).
+`redis` (dernier StatefulSet de la stack) ou un service applicatif supplémentaire — décision à prendre selon la préférence de continuer sur la famille StatefulSet ou de diversifier vers les Deployments applicatifs restants.
 
 ---
 
