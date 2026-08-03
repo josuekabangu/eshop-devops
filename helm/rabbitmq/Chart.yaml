@@ -1,0 +1,5 @@
+apiVersion: v2
+name: rabbitmq
+description: Helm chart for eShop RabbitMQ event bus 
+version: 0.1.0
+appVersion: "3.13"

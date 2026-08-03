@@ -1,0 +1,24 @@
+image: rabbitmq:3-management
+
+replicaCount: 1
+
+rabbitmq:
+  host: rabbitmq
+  port: 5672
+  user: eshop_rabbit
+  password: password
+  vhost: "/"
+
+storage: 
+  size: 1Gi
+
+probes:
+  readiness:
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 6
+  
+  liveness:
+    initialDelaySeconds: 30
+    periodSeconds: 20
