@@ -269,6 +269,64 @@ Confirmation qu'aucun service consommateur n'a rencontré d'échec d'authentific
 
 ---
 
+## Chart 5 — `identity-api` (`Deployment` + double Service)
+
+Premier service applicatif converti après les 3 StatefulSets d'infrastructure — le chart le plus riche produit jusqu'ici : double exposition Service (interne + NodePort externe), un `ConfigMap` avec 5 URLs clients distinctes, et une dépendance de cohérence critique entre l'`IssuerUri` et le port NodePort (le bug historique du "double issuer", Phase 1 Docker Compose, dépendait justement de garder ces deux valeurs synchronisées).
+
+```
+helm/identity-api/
+├── Chart.yaml
+├── values.yaml
+└── templates/
+    ├── secret.yaml
+    ├── configmap.yaml
+    ├── deployment.yaml
+    ├── service.yaml
+    └── service-external.yaml
+```
+
+**Point structurel important :** `IdentityServer__IssuerUri` référence `{{ .Values.service.externalPort }}` — la **même** valeur utilisée pour générer le `Service` NodePort. Toute modification future de ce port se propage automatiquement aux deux endroits, éliminant par construction le risque de désynchronisation manuelle qui avait causé le bug du double issuer en Phase 1.
+
+### Bugs rencontrés et corrigés
+
+**Bug 1 — image doublement préfixée (`ghcr.io/ghcr.io/...`)**
+Même classe que le bug repéré sur `catalog-api` ([[helm-repository-double-registry-prefix]]). Repéré avant application définitive par relecture systématique du rendu `helm template`. Point de vigilance additionnel : le champ `Image ID` affichait encore une trace du doublon (`...@sha256:...`) même après correction du champ `Image` — probablement une particularité de normalisation de containerd liée aux mirrors du registre local, sans impact fonctionnel tant que le champ `Image` (celui qui reflète la référence réellement demandée) est correct.
+
+**Bug 2 — URL client avec port manquant, silencieux**
+`clients.webhooksApi` vide au premier rendu → `WebhooksApiClient: "http://192.168.56.11:"` (port manquant). Même famille que le bug de probe vide sur `redis` : valeur présente en apparence, non renseignée — pas une clé totalement absente.
+**Impact s'il n'avait pas été corrigé :** seul le flux OAuth impliquant `webhooks-api` aurait échoué silencieusement ; les 4 autres clients corrects n'auraient montré aucun symptôme — un test global sur l'issuer n'aurait pas révélé ce bug spécifique, seule une vérification explicite de **chaque** clé du ConfigMap le pouvait.
+Vérification de la résolution, sur l'objet réellement déployé plutôt que sur le seul rendu `helm template` :
+```bash
+kubectl get configmap identity-api-config -o yaml | grep -A6 "WebhooksApiClient\|WebAppClient"
+```
+
+⚠️ Point mineur noté, non corrigé : `deployment.yaml` a `replicas: 1` en dur plutôt que `{{ .Values.replicaCount }}` — sans impact aujourd'hui (`values.yaml` vaut aussi `1`), mais un futur `helm upgrade` changeant `replicaCount` n'aurait aucun effet. Même classe que le `POSTGRES_USER` non templaté sur `postgres`.
+
+### Validation
+
+```bash
+kubectl delete -f k8s/identity-api/
+helm install identity-api helm/identity-api/
+```
+`STATUS: deployed`, `1/1 Running`.
+
+**Validation externe — le vrai test de bout en bout :**
+```bash
+curl http://192.168.56.11:5223/.well-known/openid-configuration | grep issuer
+# {"issuer":"http://192.168.56.11:5223", ...}
+```
+Issuer unique et cohérent, endpoints OAuth/OIDC complets — la conversion Helm préserve intégralement le comportement validé en Phase K8s.
+
+### Piliers consolidés durant cette étape
+
+| Concept | Application |
+|---|---|
+| **Synchronisation structurelle via référence partagée** | `{{ .Values.service.externalPort }}` utilisé à la fois pour le `Service` NodePort et pour `IssuerUri` — élimine par construction un risque qui avait causé un bug réel en Phase 1. |
+| **Bug silencieux sur clé de configuration textuelle** | Une valeur manquante utilisée dans une simple concaténation de chaîne (`http://host:port`) ne produit aucune erreur — vérification explicite de chaque champ nécessaire, pas seulement un test global qui n'aurait pas révélé ce bug précis. |
+| **Distinction entre `Image` et `Image ID`** | `Image` reflète la référence demandée dans le manifest ; `Image ID` peut afficher des artefacts de normalisation du runtime sans impact fonctionnel — savoir lequel fait foi évite un diagnostic erroné. |
+
+---
+
 ## Piliers consolidés
 
 | Concept | Application |
@@ -295,13 +353,14 @@ Confirmation qu'aucun service consommateur n'a rencontré d'échec d'authentific
 | `rabbitmq` (StatefulSet) | ✅ Validé |
 | `redis` (StatefulSet) | ✅ Validé |
 | **Les 3 StatefulSets de la stack** | ✅ Tous convertis |
-| Autres services applicatifs (8 restants) | ❌ |
+| `identity-api` (Deployment) | ✅ Validé |
+| Autres services applicatifs (7 restants) | ❌ |
 
 ---
 
 ## 🔜 Prochaine étape
 
-Passage aux 8 services applicatifs restants (`identity-api`, `ordering-api`, `basket-api`, `payment-processor`, `webhooks-api`, `webhook-client`, `webapp`, `order-processor`) — tous des `Deployment`, structurellement plus simples que les StatefulSets, mais chacun avec ses propres dépendances croisées à vérifier (Identity, event bus, Redis) au moment de la conversion.
+`ordering-api`, `basket-api`, ou `order-processor` — services applicatifs restants, chacun avec ses propres dépendances croisées (Identity, event bus, Redis) à vérifier activement au moment de la conversion, suivant la même discipline de relecture systématique du rendu établie depuis les StatefulSets.
 
 ---
 
