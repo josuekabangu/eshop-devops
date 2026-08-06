@@ -169,6 +169,8 @@ webhooks-api        Synced        Healthy
 
 **12/12 composants**, tous `Synced` et `Healthy`, générés depuis un seul fichier `ApplicationSet` de 25 lignes.
 
+![ArgoCD — 12 Applications Synced/Healthy](../images/argocd.png)
+
 ---
 
 ## Piliers consolidés

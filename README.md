@@ -172,6 +172,8 @@ kubectl get applications -n argocd
 # 3. ArgoCD synchronise automatiquement (selfHeal actif)
 ```
 
+![ArgoCD — les 12 Applications de la stack, toutes Synced/Healthy](images/argocd.png)
+
 ---
 
 ## 🗺️ Position dans la roadmap 12 mois
