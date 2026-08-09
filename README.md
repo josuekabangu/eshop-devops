@@ -82,6 +82,7 @@ Prendre l'application de référence [dotnet/eShop](https://github.com/dotnet/eS
 | GitOps | ArgoCD (+ ApplicationSet) |
 | CI/CD | GitHub Actions (matrix build) |
 | Registre d'images | GitHub Container Registry (ghcr.io) |
+| IaC | Terraform, AWS (S3, VPC/networking en modules) |
 | Application | .NET 10, PostgreSQL (pgvector), RabbitMQ, Redis |
 
 ---
@@ -116,6 +117,12 @@ EshopOnContainer/
 ├── .github/
 │   ├── CI.md                    # doc pipeline CI
 │   └── workflows/build-push-all.yml
+├── terraform/
+│   ├── TERRAFORM.md             # doc IaC — pilote S3, module networking
+│   ├── main.tf variables.tf outputs.tf   # racine — appelle les modules
+│   ├── networking/              # VPC, subnets publics, routage Internet
+│   ├── ec2/                     # scaffoldé, pas encore rempli
+│   └── rds/                     # scaffoldé, pas encore rempli
 └── DEVOPS.md                    # index racine — stack, piliers, roadmap à jour
 ```
 
@@ -137,6 +144,7 @@ Chaque grande étape a sa doc colocalisée avec le code qu'elle décrit — pas 
 | [.github/CI.md](.github/CI.md) | Pipeline GitHub Actions, bascule vers GHCR, bug gitlink/`.gitignore`, workflow `matrix` |
 | [helm/HELM.md](helm/HELM.md) | 12 charts Helm, décision "un chart par service", résolution structurelle du `${VAR}`, tous les bugs de templating |
 | [argocd/ARGOCD.md](argocd/ARGOCD.md) | Installation ArgoCD, `ApplicationSet`, bug CRD, bilan final |
+| [terraform/TERRAFORM.md](terraform/TERRAFORM.md) | IaC — fondamentaux Terraform, pilote AWS S3, module `networking` (VPC/subnets/routage) |
 
 ---
 
@@ -178,7 +186,7 @@ kubectl get applications -n argocd
 
 ## 🗺️ Position dans la roadmap 12 mois
 
-Ce projet couvre intégralement les objectifs **Phase 1 (GitOps & CI/CD)**, avec une avance significative sur des éléments typiquement **Phase 2/3** (GitOps avancé via ArgoCD, packaging Helm complet). Prochaine étape naturelle de la roadmap : Terraform (Infrastructure as Code) pour le provisioning, en Phase 2.
+Ce projet couvre intégralement les objectifs **Phase 1 (GitOps & CI/CD)**, avec une avance significative sur des éléments typiquement **Phase 2/3** (GitOps avancé via ArgoCD, packaging Helm complet). Le pilote Terraform (bucket S3) et le module `networking` (VPC + 2 subnets publics, routage Internet) amorcent la Phase 2 IaC — prochaine étape : module `ec2` (première instance serveur), puis `rds` et le backend distant du state (S3 + DynamoDB).
 
 ---
 
