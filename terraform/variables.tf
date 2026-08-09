@@ -1,0 +1,23 @@
+variable "aws_region" {
+  description = "Région AWS cible"
+  type        = string
+  default     = "eu-north-1"
+}
+
+variable "vpc_cidr" {
+  description = "Plage d'adresses IP du VPC"
+  type        = string
+  default     = "10.0.0.0/16"
+}
+
+variable "public_subnet_cidrs" {
+  description = "Plages IP des subnets publics"
+  type        = list(string)
+  default     = ["10.0.1.0/24", "10.0.2.0/24"]
+}
+
+variable "availability_zones" {
+  description = "Zones de disponibilité utilisées"
+  type        = list(string)
+  default     = ["eu-north-1a", "eu-north-1b"]
+}
