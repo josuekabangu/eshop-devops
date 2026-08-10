@@ -155,7 +155,7 @@ aws: [ERROR]: An error occurred (SignatureDoesNotMatch) when calling the GetCall
 ```
 Le fichier `~/.aws/credentials` contenait :
 ```
-aws_secret_access_key = EXAMPLE_SECRET_KEY_REDACTED
+aws_secret_access_key = EXAMPLE_SECRET_KEY_DO_NOT_USE_REAL_VALUE_HERE
 ```
 
 **Root cause :** le fichier `.csv` téléchargé depuis AWS contient une ligne `Access key ID,Secret access key` — la ligne entière (les deux valeurs séparées par une virgule) a été copiée dans le champ censé ne contenir que la seconde valeur.
@@ -342,9 +342,313 @@ Confirme le VPC (`vpc-067f4d50456b055b6`), CIDR `10.0.0.0/16`, tags corrects —
 
 ---
 
+## Module `ec2` & subnets privés — première instance serveur, isolation réseau pour bases de données
+
+Deuxième module Terraform, consommant les outputs du module `networking` — première démonstration concrète de la communication inter-modules. En parallèle, ajout de subnets privés au module `networking`, anticipant le futur module `rds`.
+
+### Amazon EC2 — les fondamentaux
+
+EC2 loue un serveur virtuel dans un datacenter AWS — l'équivalent cloud de la VM Vagrant utilisée depuis le début du parcours, mais hébergé chez AWS plutôt que localement.
+
+| Concept | Définition | Équivalent déjà connu |
+|---|---|---|
+| **AMI** | Image de base du serveur (OS + logiciels préinstallés) | Une image Docker, mais pour une VM entière |
+| **Instance Type** | Taille de la machine (CPU, RAM), ex: `t3.micro` | `resources.requests/limits` d'un Deployment K8s |
+| **Security Group** | Pare-feu virtuel attaché à l'instance | Rôle qu'un `NetworkPolicy` jouerait en K8s |
+| **Key Pair** | Paire de clés SSH pour authentification, jamais de mot de passe | Le SSH déjà utilisé pour se connecter à la VM Vagrant |
+
+**Principe de sécurité — moindre privilège réseau :** l'accès SSH est restreint à l'IP publique personnelle uniquement (`${var.my_ip}/32`), jamais `0.0.0.0/0`. Cette IP (obtenue via `curl -s ifconfig.me`) peut être dynamique — un `terraform apply -var="my_ip=..."` avec la nouvelle valeur est nécessaire si elle change entre deux sessions. `my_ip` n'a volontairement **aucune valeur par défaut** dans `variables.tf` — force une saisie explicite à chaque déploiement, évitant qu'une valeur ouverte soit laissée par erreur.
+
+### Génération de la clé SSH dédiée
+
+```bash
+ssh-keygen -t ed25519 -f ~/.ssh/eshop-aws-key -C "eshop-terraform"
+```
+Clé dédiée à ce contexte AWS, distincte de toute clé Vagrant existante — séparation des identifiants par contexte.
+
+### `ec2/main.tf` — points techniques clés
+
+```hcl
+data "aws_ami" "ubuntu" {
+  most_recent = true
+  owners      = ["099720109477"] # Canonical
+  filter {
+    name   = "name"
+    values = ["ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*"]
+  }
+}
+```
+`data "aws_ami"` (pas une `resource`) : Terraform **interroge** AWS pour trouver une AMI existante plutôt que d'en créer une. `most_recent = true` + `owners` (ID officiel Canonical) évitent de coder un ID d'AMI en dur, qui deviendrait obsolète à chaque nouvelle version d'Ubuntu.
+
+```hcl
+resource "aws_security_group" "instance" {
+  ingress {
+    description = "SSH depuis mon IP uniquement"
+    cidr_blocks = ["${var.my_ip}/32"]
+    # ...
+  }
+  ingress {
+    description = "HTTP ouvert (pour tester un futur serveur web)"
+    cidr_blocks = ["0.0.0.0/0"]
+    # ...
+  }
+  egress {
+    description = "Tout le trafic sortant autorise"
+    cidr_blocks = ["0.0.0.0/0"]
+    # ...
+  }
+}
+```
+`cidr_blocks = ["${var.my_ip}/32"]` — le `/32` signifie "exactement cette seule adresse IP".
+
+### Communication inter-modules — intégration racine
+
+```hcl
+# terraform/main.tf
+module "ec2" {
+  source = "./ec2"
+
+  vpc_id        = module.networking.vpc_id
+  subnet_id     = module.networking.public_subnet_ids[0]
+  my_ip         = var.my_ip
+  instance_type = var.instance_type
+}
+```
+Le module `ec2` consomme directement `module.networking.vpc_id` et `module.networking.public_subnet_ids[0]` — aucune duplication de valeur, bénéfice concret de l'architecture modulaire.
+
+### Bug rencontré et corrigé — description de règle Security Group avec accent
+
+**Symptôme :**
+```
+Error: "egress.0.description" doesn't comply with restrictions
+("^[0-9A-Za-z_ .:/()#,@\\[\\]+=&;{}!$*-]*$"): "Tout le trafic sortant autorisé"
+```
+
+**Root cause :** le champ `description` **à l'intérieur** de chaque règle `ingress`/`egress` d'un Security Group est soumis par l'API AWS elle-même à une regex stricte n'acceptant aucun caractère accentué. Le "é" de "autorisé" provoquait le rejet.
+
+**Point de nuance observé :** la description **globale** du Security Group (`aws_security_group.description`, ex: `"SSH restreint + HTTP ouvert"`) n'est, elle, soumise à aucune contrainte de ce type — l'apply a réussi malgré l'accent conservé sur ce champ précis. La contrainte ne s'applique qu'aux descriptions de règles individuelles.
+
+**Fix réellement appliqué :** les accents ont été retirés des descriptions de règles (`"autorise"`, sans é) — les descriptions sont restées en **français**, contrairement à une réécriture complète en anglais initialement envisagée. Le seul point bloquant pour l'API AWS était le caractère accentué, pas la langue elle-même.
+
+---
+
+## Subnets privés — deuxième couche de défense réseau, anticipant `rds`
+
+### Root cause de l'ajout
+
+Lacune de conception initiale : le module `networking` n'avait été pensé que pour le besoin immédiat (`ec2`, public), sans anticiper le futur module `rds` qui nécessite une isolation réseau structurelle.
+
+### Pourquoi une base de données exige un subnet privé
+
+| | Subnet public | Subnet privé |
+|---|---|---|
+| Accessible depuis Internet | Oui (filtré par Security Group) | Jamais, quelle que soit la configuration du Security Group |
+| Protection | Une seule couche (pare-feu applicatif) | Deux couches : pare-feu + absence structurelle de route Internet |
+
+Le subnet privé constitue une seconde couche de défense — même en cas d'erreur de configuration du Security Group, l'absence de route vers `0.0.0.0/0` rend la ressource structurellement inatteignable depuis l'extérieur.
+
+**Absence de NAT Gateway, volontaire et sans impact :** un NAT Gateway (payant) serait nécessaire pour un accès Internet *sortant* depuis un subnet privé — non requis ici, car RDS gère ses propres mises à jour de moteur de base de données en interne, sans besoin de sortie Internet.
+
+### Implémentation
+
+```hcl
+# networking/variables.tf
+variable "private_subnet_cidrs" {
+  description = "Private subnet CIDR ranges (for RDS)"
+  type        = list(string)
+  default     = ["10.0.11.0/24", "10.0.12.0/24"]
+}
+```
+
+```hcl
+# networking/main.tf
+resource "aws_subnet" "private" {
+  count             = length(var.private_subnet_cidrs)
+  vpc_id            = aws_vpc.main.id
+  cidr_block        = var.private_subnet_cidrs[count.index]
+  availability_zone = var.availability_zones[count.index]
+  tags = { Name = "eshop-private-${count.index + 1}" }
+}
+```
+
+Différences délibérées avec `aws_subnet.public` : absence de `map_public_ip_on_launch`, et surtout **absence de `aws_route_table_association`** — sans association explicite, ce subnet utilise la route table par défaut du VPC, qui ne contient que la route interne implicite, jamais de route vers Internet.
+
+### Bug de nommage rencontré et corrigé
+
+**Symptôme :** l'output était initialement déclaré `private_subnet_cidrs` alors qu'il exposait `aws_subnet.private[*].id` — des identifiants de subnet, pas des plages CIDR. Le contenu réel (`subnet-05cb072419adf1b4e`, ...) ne correspondait pas au nom donné.
+
+**Fix :** renommage en `private_subnet_ids`, cohérent avec `public_subnet_ids` déjà correctement nommé.
+
+**Principe illustré :** la cohérence de nommage entre ce qu'une variable/output *dit* contenir et ce qu'elle contient *réellement* est aussi critique en Terraform qu'elle l'était pour les noms de Secrets/ConfigMaps Kubernetes tout au long du parcours — une confusion de nommage coûte du temps de diagnostic à quiconque relit le code plus tard.
+
+---
+
+## Déploiement et validation
+
+```bash
+terraform plan -var="my_ip=$(curl -s ifconfig.me)"
+terraform apply -var="my_ip=$(curl -s ifconfig.me)"
+```
+Résultat : `3 added` (instance, key pair, security group), confirmation exacte de la règle SSH avec l'IP réelle (`176.169.116.100/32`).
+
+**Validation par connexion SSH réelle :**
+```bash
+ssh -i ~/.ssh/eshop-aws-key ubuntu@16.16.67.108
+```
+Connexion réussie, IP privée interne confirmée (`10.0.1.55`, cohérente avec le premier subnet public `10.0.1.0/24`) — preuve fonctionnelle complète, pas seulement une validation de plan.
+
+### Piliers consolidés durant cette étape
+
+| Concept | Application |
+|---|---|
+| **Communication inter-modules par outputs** | `ec2` consomme `vpc_id` et `public_subnet_ids` de `networking` sans aucune duplication de valeur. |
+| **Défense en profondeur réseau** | Security Group (couche applicative) + absence de route Internet en subnet privé (couche structurelle) — deux mécanismes indépendants. |
+| **Concevoir pour l'architecture cible complète** | Correction proactive d'une lacune de conception initiale, avant qu'elle ne bloque le futur module `rds`. |
+| **Cohérence de nommage variable/output vs contenu réel** | Un output mal nommé (`_cidrs` contenant des `_ids`) reste fonctionnel mais trompeur — corrigé par principe, pas seulement par nécessité technique. |
+| **Contraintes de validation spécifiques à certains champs AWS** | La regex restrictive sur les descriptions de règles Security Group (mais pas sur la description globale) illustre que les contraintes AWS peuvent être granulaires et inattendues — toujours lire le message d'erreur complet plutôt que de supposer. |
+
+---
+
+## Module `rds` — base de données managée, isolée en subnet privé
+
+Troisième et dernier module de cette branche Terraform. Consomme les subnets privés (ajoutés proactivement au module `networking`) et le Security Group de l'EC2 (référencé directement, sans passer par une IP) — démonstration complète de la communication inter-modules et de la défense en profondeur réseau.
+
+### Amazon RDS — les fondamentaux
+
+RDS est une base de données **managée** : AWS gère l'installation, les patchs de sécurité, les sauvegardes automatiques et la haute disponibilité — contrairement au `postgres-0` StatefulSet K3s du projet, entièrement auto-géré.
+
+| | StatefulSet Postgres (K3s) | RDS |
+|---|---|---|
+| Patch de sécurité du moteur | Manuel (rebuild image, redéploiement) | Automatique (fenêtre de maintenance AWS) |
+| Sauvegardes | Aucune stratégie en place | Snapshots automatiques quotidiens |
+| Scalabilité verticale | Modification manuelle du YAML | Changement de variable Terraform |
+| Haute disponibilité | Aucune (1 seul Pod) | Option Multi-AZ disponible (non activée ici, hors Free Tier) |
+
+**Concepts nouveaux :** `DB Subnet Group` (regroupement d'au moins 2 subnets d'AZ différentes où RDS peut placer l'instance — obligatoire même en single-AZ) ; `Multi-AZ` (réplique synchrone + bascule automatique, non activé ici).
+
+**Choix Free Tier strict, validé avant implémentation :** `db.t3.micro`, single-AZ, 20 Go de stockage — Multi-AZ exclu volontairement car non couvert par le Free Tier (750h/mois, 12 premiers mois).
+
+### `rds/variables.tf` — `sensitive = true`
+
+```hcl
+variable "db_password" {
+  description = "RDS master password"
+  type        = string
+  sensitive   = true
+}
+```
+
+Terraform masque automatiquement cette valeur dans tous les affichages (`plan`, `apply`, logs) — apparaît comme `(sensitive value)`. Ne chiffre pas le `.tfstate` (déjà exclu de Git), mais protège contre une exposition accidentelle en terminal partagé ou log CI. Aucune valeur par défaut — force une saisie explicite en ligne de commande, jamais stockée en clair dans un fichier versionné.
+
+### `rds/main.tf` — points techniques clés
+
+```hcl
+resource "aws_security_group" "rds" {
+  ingress {
+    from_port       = 5432
+    to_port         = 5432
+    protocol        = "tcp"
+    security_groups = [var.ec2_security_group_id]   # ← pas cidr_blocks
+  }
+}
+
+resource "aws_db_instance" "main" {
+  # ...
+  publicly_accessible = false
+  skip_final_snapshot = true
+  multi_az             = false
+}
+```
+
+| Attribut | Explication |
+|---|---|
+| `ingress.security_groups = [var.ec2_security_group_id]` | Référence **directement** le Security Group de l'EC2, pas une plage d'IP (`cidr_blocks`). Seules les ressources partageant ce Security Group précis peuvent atteindre le port 5432 — pattern standard pour la communication service-à-service intra-VPC, plus robuste qu'une IP qui pourrait changer. |
+| `publicly_accessible = false` | Empêche toute IP publique sur l'instance RDS, même si le subnet le permettait — troisième couche de défense après le Security Group et l'isolation réseau du subnet privé lui-même. |
+| `skip_final_snapshot = true` | Évite un snapshot final payant en stockage au moment de `terraform destroy` — acceptable en apprentissage, jamais en production. |
+
+### Intégration racine — communication à trois modules
+
+```hcl
+module "rds" {
+  source = "./rds"
+  vpc_id                = module.networking.vpc_id
+  private_subnet_ids    = module.networking.private_subnet_ids
+  ec2_security_group_id = module.ec2.security_group_id
+  db_password            = var.db_password
+}
+```
+
+Le module `rds` consomme des outputs de **deux modules différents** (`networking` et `ec2`) — premier graphe de dépendances à plusieurs niveaux du projet. Prérequis ajouté à `ec2/outputs.tf` : `output "security_group_id" { value = aws_security_group.instance.id }`.
+
+### Bugs rencontrés et corrigés
+
+**Bug 1 — output mal placé, référence à une ressource hors de portée**
+```
+Error: Reference to undeclared resource
+A managed resource "aws_security_group" "instance" has not been declared in the root module.
+```
+Root cause : un output `security_group_id` avait été ajouté à `terraform/outputs.tf` (racine), référençant `aws_security_group.instance` — une ressource qui n'existe que **dans** le module `ec2`, jamais directement accessible depuis la racine sans passer par `module.ec2.security_group_id`.
+Fix : suppression du bloc erroné à la racine, remplacé par les véritables outputs attendus (`db_endpoint`, `db_name` du module `rds`).
+Point méthodologique : la résolution a nécessité plusieurs itérations, une modification via `nano` n'ayant pas été effectivement sauvegardée à la première tentative — écrasement du fichier via un heredoc (`cat > fichier << 'EOF' ... EOF`) utilisé comme méthode plus fiable pour garantir l'écriture complète.
+Principe : la portée des ressources en Terraform suit strictement les frontières de module — réaffirme le principe déjà rencontré sur `networking` ([[terraform-module-variable-scope-undeclared]] côté variables, ici côté ressources).
+
+**Bug 2 — faute de frappe sur un nom de paquet**
+```
+E: Unable to locate package postgresql-clent
+```
+`postgresql-clent` au lieu de `postgresql-client` (lettres inversées) — correction orthographique simple, sans impact sur l'infrastructure.
+
+### Déploiement et validation
+
+```bash
+terraform apply -var="my_ip=$(curl -s ifconfig.me)" -var="db_password=$DB_PASS"
+```
+`3 added` (DB subnet group, Security Group RDS, instance RDS), création en 4m55s — significativement plus long qu'EC2 ou le VPC, cohérent avec le provisionnement complet d'un moteur de base de données géré.
+
+**Validation croisée — preuve fonctionnelle de l'isolation réseau, à double sens :**
+
+Depuis l'EC2 (autorisé) :
+```bash
+ssh -i ~/.ssh/eshop-aws-key ubuntu@16.16.67.108
+psql -h eshop-db.cjcak6acmxd9.eu-north-1.rds.amazonaws.com -U postgres -d eshopdb
+# connexion réussie, \l confirme eshopdb
+```
+
+Depuis la VM Vagrant (non autorisée) :
+```bash
+timeout 5 bash -c "</dev/tcp/eshop-db.cjcak6acmxd9.eu-north-1.rds.amazonaws.com/5432" && echo "OUVERT" || echo "FERMÉ/TIMEOUT"
+# FERMÉ/TIMEOUT
+```
+
+**Cette double preuve (succès depuis la source autorisée, échec depuis une source non autorisée) constitue la validation la plus rigoureuse possible d'une règle de sécurité réseau** — un test unique de succès n'aurait pas suffi à exclure une configuration trop permissive.
+
+### Piliers consolidés durant cette étape
+
+| Concept | Application |
+|---|---|
+| **Sécurité par référence de Security Group plutôt que par IP** | `security_groups = [var.ec2_security_group_id]` — approche robuste pour la communication intra-VPC, indépendante de toute IP changeante. |
+| **Défense en profondeur, validée en pratique** | Security Group + subnet privé + `publicly_accessible = false` — trois couches indépendantes, dont l'efficacité combinée a été prouvée par un test d'échec délibéré, pas seulement par lecture du code. |
+| **Communication inter-modules à plusieurs niveaux** | `rds` consomme simultanément des outputs de `networking` et `ec2` — premier graphe de dépendances à trois modules du projet. |
+| **Validation par preuve négative** | Confirmer qu'un accès *refusé* échoue réellement est aussi important que confirmer qu'un accès *autorisé* réussit. |
+| **Frontières strictes de portée entre modules** | Réaffirmé une seconde fois — aucune ressource n'est accessible hors de son module sans output explicite. |
+
+---
+
+## 🏆 Bilan de l'ensemble de la branche Terraform
+
+| Module | Ressources | Rôle |
+|---|---|---|
+| `networking` | VPC, IGW, 4 subnets (2 publics, 2 privés), route table | Fondation réseau de toute l'infrastructure |
+| `ec2` | Instance, Key Pair, Security Group | Premier serveur applicatif, accès SSH restreint |
+| `rds` | Instance de base de données, DB Subnet Group, Security Group | Base de données managée, isolée en profondeur |
+
+Infrastructure AWS complète provisionnée en Infrastructure as Code, avec architecture modulaire réutilisable, sécurité réseau vérifiée par preuve fonctionnelle (pas seulement déclarative), et documentation exhaustive de chaque bug rencontré.
+
+---
+
 ## 🔜 Prochaine étape
 
-Module `ec2` — première instance serveur, déployée dans le subnet public créé ici, consommant `vpc_id` et `public_subnet_ids` comme entrées. Module `rds` déjà scaffoldé (dossier vide) pour la base de données managée à suivre.
+Selon la roadmap Phase 2 : stack d'observabilité (métriques, logs, tracing), ou poursuite Terraform vers un backend distant S3 pour le state — dette technique déjà tracée depuis le pilote initial.
 
 ---
 
