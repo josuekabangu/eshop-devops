@@ -1,3 +1,4 @@
+# Networking Variables 
 variable "aws_region" {
   description = "Région AWS cible"
   type        = string
@@ -20,4 +21,16 @@ variable "availability_zones" {
   description = "Zones de disponibilité utilisées"
   type        = list(string)
   default     = ["eu-north-1a", "eu-north-1b"]
+}
+
+# EC2 Variables
+variable "my_ip" {
+  description = "Mon IP publique pour restreindre SSH"
+  type        = string
+}
+
+variable "instance_type" {
+  description = "Type d'instance EC2"
+  type        = string
+  default     = "t3.micro"
 }
