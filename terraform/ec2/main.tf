@@ -18,11 +18,11 @@ resource "aws_key_pair" "main" {
 # Le pare-feu virtuel de l'instance
 resource "aws_security_group" "instance" {
   name        = "eshop-ec2-sg"
-  description = "SSH restreint + HTTP ouvert"
+  description = "SSH restricted access + HTTP open + K3s"
   vpc_id      = var.vpc_id
 
   ingress {
-    description = "SSH depuis mon IP uniquement"
+    description = "SSH from my IP only"
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
@@ -30,15 +30,31 @@ resource "aws_security_group" "instance" {
   }
 
   ingress {
-    description = "HTTP ouvert (pour tester un futur serveur web)"
+    description = "HTTP open for future web server testing"
     from_port   = 80
     to_port     = 80
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
 
+  ingress {
+    description = "K3s API server"
+    from_port   = 6443
+    to_port     = 6443
+    protocol    = "tcp"
+    cidr_blocks = ["${var.my_ip}/32"]
+  }
+
+  ingress {
+    description = "eShop NodePorts range"
+    from_port   = 5000
+    to_port     = 32767
+    protocol    = "tcp"
+    cidr_blocks = ["${var.my_ip}/32"]
+  }
+
   egress {
-    description = "Tout le trafic sortant autorise"
+    description = "All outbound traffic allowed"
     from_port   = 0
     to_port     = 0
     protocol    = "-1"

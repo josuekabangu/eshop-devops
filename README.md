@@ -82,7 +82,8 @@ Prendre l'application de référence [dotnet/eShop](https://github.com/dotnet/eS
 | GitOps | ArgoCD (+ ApplicationSet) |
 | CI/CD | GitHub Actions (matrix build) |
 | Registre d'images | GitHub Container Registry (ghcr.io) |
-| IaC | Terraform, AWS (S3, VPC/networking en modules) |
+| IaC | Terraform, AWS (S3, VPC/networking, EC2, RDS en modules) |
+| Config management | Ansible (installation K3s idempotente sur EC2) |
 | Application | .NET 10, PostgreSQL (pgvector), RabbitMQ, Redis |
 
 ---
@@ -118,11 +119,15 @@ EshopOnContainer/
 │   ├── CI.md                    # doc pipeline CI
 │   └── workflows/build-push-all.yml
 ├── terraform/
-│   ├── TERRAFORM.md             # doc IaC — pilote S3, module networking
+│   ├── TERRAFORM.md             # doc IaC — pilote S3, modules networking + ec2 + rds
 │   ├── main.tf variables.tf outputs.tf   # racine — appelle les modules
-│   ├── networking/              # VPC, subnets publics, routage Internet
-│   ├── ec2/                     # scaffoldé, pas encore rempli
-│   └── rds/                     # scaffoldé, pas encore rempli
+│   ├── networking/              # VPC, subnets publics ET privés, routage Internet
+│   ├── ec2/                     # instance serveur, Security Group, clé SSH
+│   └── rds/                     # base de données managée, isolée en subnet privé
+├── ansible/
+│   ├── ANSIBLE.md               # doc config management — K3s idempotent sur EC2
+│   ├── ansible.cfg inventory.ini
+│   └── k3s-install.yml
 └── DEVOPS.md                    # index racine — stack, piliers, roadmap à jour
 ```
 
@@ -144,7 +149,8 @@ Chaque grande étape a sa doc colocalisée avec le code qu'elle décrit — pas 
 | [.github/CI.md](.github/CI.md) | Pipeline GitHub Actions, bascule vers GHCR, bug gitlink/`.gitignore`, workflow `matrix` |
 | [helm/HELM.md](helm/HELM.md) | 12 charts Helm, décision "un chart par service", résolution structurelle du `${VAR}`, tous les bugs de templating |
 | [argocd/ARGOCD.md](argocd/ARGOCD.md) | Installation ArgoCD, `ApplicationSet`, bug CRD, bilan final |
-| [terraform/TERRAFORM.md](terraform/TERRAFORM.md) | IaC — fondamentaux Terraform, pilote AWS S3, module `networking` (VPC/subnets/routage) |
+| [terraform/TERRAFORM.md](terraform/TERRAFORM.md) | IaC — fondamentaux Terraform, pilote AWS S3, modules `networking`/`ec2`/`rds` complets, isolation réseau validée par preuve fonctionnelle |
+| [ansible/ANSIBLE.md](ansible/ANSIBLE.md) | Config management — K3s idempotent sur EC2, incident de sécurité (clé AWS exposée puis révoquée) |
 
 ---
 
@@ -158,6 +164,8 @@ Chaque grande étape a sa doc colocalisée avec le code qu'elle décrit — pas 
 | Data Protection Keys non persistées | Perte de session possible en cas de scaling multi-réplicas | `PersistKeysToStackExchangeRedis` ou équivalent |
 | Packages GHCR publics | Pas d'authentification requise pour puller les images | `imagePullSecret` + packages privés |
 | Tag `latest` utilisé dans les manifests Helm | Pas de garantie de version figée | Référencer le SHA du commit (`${{ github.sha }}`) |
+| State Terraform local (`terraform.tfstate`) | Pas de verrouillage, pas de partage d'équipe, risque de perte locale | Backend distant S3 + verrouillage DynamoDB |
+| `skip_final_snapshot = true` sur RDS | Aucun snapshot conservé à la destruction de l'instance | À retirer avant tout scénario proche de la production |
 
 ---
 
@@ -186,7 +194,7 @@ kubectl get applications -n argocd
 
 ## 🗺️ Position dans la roadmap 12 mois
 
-Ce projet couvre intégralement les objectifs **Phase 1 (GitOps & CI/CD)**, avec une avance significative sur des éléments typiquement **Phase 2/3** (GitOps avancé via ArgoCD, packaging Helm complet). Le pilote Terraform (bucket S3) et le module `networking` (VPC + 2 subnets publics, routage Internet) amorcent la Phase 2 IaC — prochaine étape : module `ec2` (première instance serveur), puis `rds` et le backend distant du state (S3 + DynamoDB).
+Ce projet couvre intégralement les objectifs **Phase 1 (GitOps & CI/CD)**, avec une avance significative sur des éléments typiquement **Phase 2/3** (GitOps avancé via ArgoCD, packaging Helm complet). La branche Terraform (pilote S3, modules `networking`/`ec2`/`rds`) et Ansible (configuration K3s idempotente sur l'EC2) complètent la Phase 2 IaC — infrastructure AWS entièrement provisionnée en code, sécurité réseau vérifiée par preuve fonctionnelle. Un incident de sécurité réel (clé AWS exposée en documentation, détectée et mise en quarantaine automatiquement par AWS) a été traité en conditions réelles durant cette phase — voir `ansible/ANSIBLE.md`. Reste comme dette technique tracée : backend distant du state Terraform (S3 + DynamoDB).
 
 ---
 

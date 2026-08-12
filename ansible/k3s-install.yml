@@ -1,0 +1,27 @@
+---
+- name: Install and configure K3s on eShop EC2
+  hosts: eshop_ec2
+  become: true
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+
+    - name: Install K3s
+      shell: curl -sfL https://get.k3s.io | sh -
+      args:
+        creates: /usr/local/bin/k3s
+
+    - name: Wait for K3s config file to exist
+      wait_for:
+        path: /etc/rancher/k3s/k3s.yaml
+        timeout: 60
+
+    - name: Confirm K3s node is ready
+      shell: k3s kubectl get nodes
+      register: k3s_status
+      changed_when: false
+
+    - name: Display K3s status
+      debug:
+        var: k3s_status.stdout_lines

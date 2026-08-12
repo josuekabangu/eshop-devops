@@ -1,0 +1,29 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: eshop-aws
+  namespace: argocd
+spec:
+  generators:
+    - list:
+        elements:
+          - name: postgres
+            path: helm/postgres
+          - name: catalog-api
+            path: helm/catalog-api
+  template:
+    metadata:
+      name: "{{name}}"
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/josuekabangu/eshop-devops.git
+        targetRevision: main
+        path: "{{path}}"
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: default
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true

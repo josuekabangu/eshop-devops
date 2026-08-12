@@ -2,7 +2,7 @@
 
 **Josué Kabangu** — DevOps Engineer en apprentissage | Phase 1 (2026)
 
-Application de référence Microsoft [dotnet/eShop](https://github.com/dotnet/eShop) — 12 microservices .NET — conteneurisée et déployée avec Docker, Kubernetes, Helm, GitHub Actions, ArgoCD et Terraform (modules AWS — networking en cours).
+Application de référence Microsoft [dotnet/eShop](https://github.com/dotnet/eShop) — 12 microservices .NET — conteneurisée et déployée avec Docker, Kubernetes, Helm, GitHub Actions, ArgoCD, Terraform (infrastructure AWS complète) et Ansible (configuration K3s).
 
 ---
 
@@ -17,7 +17,8 @@ Application de référence Microsoft [dotnet/eShop](https://github.com/dotnet/eS
 | [.github/CI.md](.github/CI.md) | Pipeline GitHub Actions, bascule vers ghcr.io |
 | [helm/HELM.md](helm/HELM.md) | Conversion manifests bruts → charts Helm — 12/12 composants |
 | [argocd/ARGOCD.md](argocd/ARGOCD.md) | GitOps — ArgoCD + ApplicationSet, 12/12 Synced/Healthy |
-| [terraform/TERRAFORM.md](terraform/TERRAFORM.md) | IaC — pilote AWS S3, module `networking` (VPC/subnets), fondamentaux Terraform |
+| [terraform/TERRAFORM.md](terraform/TERRAFORM.md) | IaC — pilote AWS S3, modules `networking`/`ec2`/`rds` complets, fondamentaux Terraform |
+| [ansible/ANSIBLE.md](ansible/ANSIBLE.md) | Configuration management — installation K3s idempotente sur EC2, incident de sécurité (clé AWS) |
 
 ---
 
@@ -31,7 +32,8 @@ Application de référence Microsoft [dotnet/eShop](https://github.com/dotnet/eS
 | GitHub Actions | Build + push automatique des 9 images vers ghcr.io | ✅ Ph2 |
 | Helm | Charts par service — 12/12 composants convertis | ✅ Ph2 |
 | ArgoCD | GitOps — ApplicationSet, 12/12 Synced/Healthy, selfHeal validé | ✅ Ph2 |
-| Terraform | IaC — pilote S3 validé, module `networking` (VPC + 2 subnets publics) validé, `ec2`/`rds` scaffoldés | 🔄 Ph2 |
+| Terraform | IaC — pilote S3 + modules `networking`/`ec2`/`rds` déployés, isolation réseau validée par preuve fonctionnelle | ✅ Ph2 |
+| Ansible | Installation K3s idempotente sur EC2 (playbook `changed`→`ok` validé) | ✅ Ph2 |
 
 ---
 
@@ -46,6 +48,7 @@ Application de référence Microsoft [dotnet/eShop](https://github.com/dotnet/eS
 | **Stateless vs Stateful** | APIs interchangeables vs Postgres avec volume dédié |
 | **Issuer OIDC stable** | IssuerUri fixé via env var — jamais déduit du réseau |
 | **Data Protection Keys** | État cryptographique local → externaliser avant de scaler |
+| **Traitement d'un secret exposé comme définitivement compromis** | Clé AWS révoquée, historique Git réécrit (`git filter-repo`) et force-poussé après une fuite accidentelle en documentation — appliqué en conditions réelles, pas seulement en théorie |
 
 ---
 
@@ -58,4 +61,5 @@ Application de référence Microsoft [dotnet/eShop](https://github.com/dotnet/eS
 | Ph2 — CI/CD | Build + push automatique des images | GitHub Actions, ghcr.io | ✅ |
 | Ph2 — Packaging | Charts Helm, 12/12 composants | Helm | ✅ |
 | Ph2 — GitOps | Réconciliation continue Git ↔ cluster | ArgoCD, ApplicationSet | ✅ |
-| Ph2 — IaC | Provisionner le cloud | Terraform, AWS | 🔄 |
+| Ph2 — IaC | Provisionner le cloud | Terraform, AWS | ✅ |
+| Ph2 — Config management | Configuration idempotente des serveurs | Ansible | ✅ |

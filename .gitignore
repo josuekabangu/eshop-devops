@@ -8,3 +8,4 @@
 .terraform/
 docker/.env
 *.zip
+aws/

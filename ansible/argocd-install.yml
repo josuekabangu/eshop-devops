@@ -1,0 +1,46 @@
+---
+- name: Install ArgoCD on eShop K3s cluster
+  hosts: eshop_ec2
+  become: true
+  tasks:
+    - name: Create argocd namespace
+      shell: k3s kubectl create namespace argocd
+      register: ns_result
+      failed_when:
+        - ns_result.rc != 0
+        - "'AlreadyExists' not in ns_result.stderr"
+      changed_when: ns_result.rc == 0
+
+    - name: Install ArgoCD manifests
+      shell: >
+        k3s kubectl apply -n argocd
+        -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+        --server-side --force-conflicts
+      register: argocd_install
+      changed_when: "'unchanged' not in argocd_install.stdout"
+
+    - name: Wait for ArgoCD server deployment to be available
+      shell: k3s kubectl wait --for=condition=available --timeout=180s deployment/argocd-server -n argocd
+      register: wait_result
+      changed_when: false
+
+    - name: Copy ApplicationSet manifest to the instance
+      copy:
+        src: eshop-applicationset-aws.yaml
+        dest: /home/ubuntu/eshop-applicationset-aws.yaml
+        owner: ubuntu
+        mode: '0644'
+
+    - name: Apply ApplicationSet
+      shell: k3s kubectl apply -f /home/ubuntu/eshop-applicationset-aws.yaml
+      register: appset_result
+      changed_when: "'unchanged' not in appset_result.stdout"
+
+    - name: Show ArgoCD applications status
+      shell: k3s kubectl get applications -n argocd
+      register: apps_status
+      changed_when: false
+
+    - name: Display applications status
+      debug:
+        var: apps_status.stdout_lines
