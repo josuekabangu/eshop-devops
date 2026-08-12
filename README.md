@@ -82,8 +82,7 @@ Prendre l'application de référence [dotnet/eShop](https://github.com/dotnet/eS
 | GitOps | ArgoCD (+ ApplicationSet) |
 | CI/CD | GitHub Actions (matrix build) |
 | Registre d'images | GitHub Container Registry (ghcr.io) |
-| IaC | Terraform, AWS (S3, VPC/networking, EC2, RDS en modules) |
-| Config management | Ansible (K3s + ArgoCD idempotents sur EC2) |
+| IaC | Terraform, AWS (S3, VPC/networking en modules) |
 | Application | .NET 10, PostgreSQL (pgvector), RabbitMQ, Redis |
 
 ---
@@ -149,8 +148,7 @@ Chaque grande étape a sa doc colocalisée avec le code qu'elle décrit — pas 
 | [.github/CI.md](.github/CI.md) | Pipeline GitHub Actions, bascule vers GHCR, bug gitlink/`.gitignore`, workflow `matrix` |
 | [helm/HELM.md](helm/HELM.md) | 12 charts Helm, décision "un chart par service", résolution structurelle du `${VAR}`, tous les bugs de templating |
 | [argocd/ARGOCD.md](argocd/ARGOCD.md) | Installation ArgoCD, `ApplicationSet`, bug CRD, bilan final |
-| [terraform/TERRAFORM.md](terraform/TERRAFORM.md) | IaC — fondamentaux Terraform, pilote AWS S3, modules `networking`/`ec2`/`rds` complets, isolation réseau validée par preuve fonctionnelle |
-| [ansible/ANSIBLE.md](ansible/ANSIBLE.md) | Config management — K3s + ArgoCD idempotents sur EC2, incident de sécurité (clé AWS) et incident de capacité (RAM/disque) résolus |
+| [terraform/TERRAFORM.md](terraform/TERRAFORM.md) | IaC — fondamentaux Terraform, pilote AWS S3, module `networking` (VPC/subnets/routage) |
 
 ---
 
@@ -194,7 +192,7 @@ kubectl get applications -n argocd
 
 ## 🗺️ Position dans la roadmap 12 mois
 
-Ce projet couvre intégralement les objectifs **Phase 1 (GitOps & CI/CD)**, avec une avance significative sur des éléments typiquement **Phase 2/3** (GitOps avancé via ArgoCD, packaging Helm complet). La branche Terraform (pilote S3, modules `networking`/`ec2`/`rds`) et Ansible (K3s + ArgoCD idempotents sur l'EC2, sous-ensemble `postgres`+`catalog-api` déployé) complètent la Phase 2 IaC — infrastructure AWS entièrement provisionnée en code, sécurité réseau vérifiée par preuve fonctionnelle. Deux incidents réels traités de bout en bout durant cette phase — sécurité (clé AWS exposée, quarantaine automatique AWS) et capacité (saturation RAM/disque sur `t3.small`, résolue par swap + désactivation de composants ArgoCD non essentiels) — voir `ansible/ANSIBLE.md`. Reste comme dette technique tracée : backend distant du state Terraform (S3 + DynamoDB).
+Ce projet couvre intégralement les objectifs **Phase 1 (GitOps & CI/CD)**, avec une avance significative sur des éléments typiquement **Phase 2/3** (GitOps avancé via ArgoCD, packaging Helm complet). Le pilote Terraform (bucket S3) et le module `networking` (VPC + 2 subnets publics, routage Internet) amorcent la Phase 2 IaC — prochaine étape : module `ec2` (première instance serveur), puis `rds` et le backend distant du state (S3 + DynamoDB).
 
 ---
 

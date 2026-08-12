@@ -13,3 +13,6 @@ aws/
 *.pem
 eshop-aws-key
 eshop-aws-key.pub
+=======
+aws/
+

@@ -185,6 +185,7 @@ En parallèle de la mise en place de Terraform, une clé d'accès AWS (`terrafor
 
 ---
 
+<<<<<<< HEAD
 ## Ansible + ArgoCD sur AWS — déploiement et résolution d'incident de capacité
 
 Extension du module Ansible à l'installation d'ArgoCD et au déploiement d'un sous-ensemble d'eShop (`postgres` + `catalog-api`) sur l'instance EC2 `t3.small` (2 Go RAM), dans les limites du Free Tier restreint suite à l'incident de sécurité de la branche précédente.
@@ -284,6 +285,11 @@ Infrastructure complète provisionnée et configurée de façon reproductible :
 4. **Deux incidents réels traités de bout en bout** — sécurité (clé compromise) et capacité (saturation mémoire/disque), chacun diagnostiqué à sa cause racine avant correction
 
 Cette séquence complète — provisioning, configuration, déploiement, incident de sécurité, incident de capacité, résolution méthodique de chacun — constitue une pièce de portfolio particulièrement riche : elle démontre une compétence de troubleshooting réel, pas seulement la capacité à suivre une procédure qui fonctionne du premier coup.
+=======
+## 🔜 Prochaine étape
+
+Reprise du déploiement applicatif sur ce cluster AWS : installation d'ArgoCD, `ApplicationSet` limité à `postgres` + `catalog-api` (sous-ensemble adapté à la RAM disponible sur `t3.small`, ~2 Go).
+>>>>>>> 886310e5d247f2e87c18fdb1540144e302f57bdb
 
 ---
 
