@@ -18,7 +18,7 @@ Application de référence Microsoft [dotnet/eShop](https://github.com/dotnet/eS
 | [helm/HELM.md](helm/HELM.md) | Conversion manifests bruts → charts Helm — 12/12 composants |
 | [argocd/ARGOCD.md](argocd/ARGOCD.md) | GitOps — ArgoCD + ApplicationSet, 12/12 Synced/Healthy |
 | [terraform/TERRAFORM.md](terraform/TERRAFORM.md) | IaC — pilote AWS S3, modules `networking`/`ec2`/`rds` complets, fondamentaux Terraform |
-| [ansible/ANSIBLE.md](ansible/ANSIBLE.md) | Configuration management — installation K3s idempotente sur EC2, incident de sécurité (clé AWS) |
+| [ansible/ANSIBLE.md](ansible/ANSIBLE.md) | Configuration management — K3s + ArgoCD idempotents sur EC2, incidents sécurité (clé AWS) et capacité (RAM/disque) résolus |
 
 ---
 
@@ -32,7 +32,8 @@ Application de référence Microsoft [dotnet/eShop](https://github.com/dotnet/eS
 | GitHub Actions | Build + push automatique des 9 images vers ghcr.io | ✅ Ph2 |
 | Helm | Charts par service — 12/12 composants convertis | ✅ Ph2 |
 | ArgoCD | GitOps — ApplicationSet, 12/12 Synced/Healthy, selfHeal validé | ✅ Ph2 |
-| Terraform | IaC — pilote S3 validé, module `networking` (VPC + 2 subnets publics) validé, `ec2`/`rds` scaffoldés | 🔄 Ph2 |
+| Terraform | IaC — pilote S3 + modules `networking`/`ec2`/`rds` déployés, isolation réseau validée par preuve fonctionnelle | ✅ Ph2 |
+| Ansible | K3s + ArgoCD sur EC2, sous-ensemble eShop déployé (`postgres`+`catalog-api`), incident de capacité résolu | ✅ Ph2 |
 
 ---
 
