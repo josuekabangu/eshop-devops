@@ -9,3 +9,7 @@
 docker/.env
 *.zip
 aws/
+.terraform.lock.hcl
+*.pem
+eshop-aws-key
+eshop-aws-key.pub

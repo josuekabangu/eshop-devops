@@ -33,7 +33,7 @@ Application de référence Microsoft [dotnet/eShop](https://github.com/dotnet/eS
 | Helm | Charts par service — 12/12 composants convertis | ✅ Ph2 |
 | ArgoCD | GitOps — ApplicationSet, 12/12 Synced/Healthy, selfHeal validé | ✅ Ph2 |
 | Terraform | IaC — pilote S3 + modules `networking`/`ec2`/`rds` déployés, isolation réseau validée par preuve fonctionnelle | ✅ Ph2 |
-| Ansible | Installation K3s idempotente sur EC2 (playbook `changed`→`ok` validé) | ✅ Ph2 |
+| Ansible | K3s + ArgoCD sur EC2, sous-ensemble eShop déployé (`postgres`+`catalog-api`), incident de capacité résolu | ✅ Ph2 |
 
 ---
 

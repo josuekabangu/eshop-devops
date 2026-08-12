@@ -185,9 +185,105 @@ En parallèle de la mise en place de Terraform, une clé d'accès AWS (`terrafor
 
 ---
 
-## 🔜 Prochaine étape
+## Ansible + ArgoCD sur AWS — déploiement et résolution d'incident de capacité
 
-Reprise du déploiement applicatif sur ce cluster AWS : installation d'ArgoCD, `ApplicationSet` limité à `postgres` + `catalog-api` (sous-ensemble adapté à la RAM disponible sur `t3.small`, ~2 Go).
+Extension du module Ansible à l'installation d'ArgoCD et au déploiement d'un sous-ensemble d'eShop (`postgres` + `catalog-api`) sur l'instance EC2 `t3.small` (2 Go RAM), dans les limites du Free Tier restreint suite à l'incident de sécurité de la branche précédente.
+
+### `ansible/argocd-install.yml` — points techniques d'idempotence
+
+| Tâche | Mécanisme |
+|---|---|
+| `Create argocd namespace` | `failed_when` personnalisé — un namespace déjà existant (`AlreadyExists`) n'est pas traité comme une erreur, contrairement au comportement par défaut d'Ansible sur un code de sortie non nul |
+| `Install ArgoCD manifests` / `Apply ApplicationSet` | `changed_when` basé sur le contenu réel de la sortie de `kubectl apply` (qui indique littéralement `"unchanged"` quand rien n'a changé) |
+
+### `ansible/eshop-applicationset-aws.yaml` — générateur `list`
+
+```yaml
+spec:
+  generators:
+    - list:
+        elements:
+          - name: postgres
+            path: helm/postgres
+          - name: catalog-api
+            path: helm/catalog-api
+```
+
+**Différence avec l'ApplicationSet local :** générateur **`list`** (liste explicite de 2 éléments) plutôt que **`git.directories`** (scan automatique de `helm/*`, utilisé en local pour les 12 composants). Choix délibéré pour restreindre le déploiement à un sous-ensemble compatible avec les ressources disponibles.
+
+### Bug rencontré et corrigé — fichier source introuvable pour le module `copy`
+
+**Symptôme :**
+```
+fatal: [13.60.68.91]: FAILED! => {"msg": "Could not find or access 'eshop-applicationset-aws.yaml'
+Searched in: /home/vagrant/EshopOnContainer/ansible/files/...
+             /home/vagrant/EshopOnContainer/ansible/eshop-applicationset-aws.yaml ..."}
+```
+Root cause : le module `copy` d'Ansible cherche le fichier source **sur le control node** (la VM Vagrant), dans le dossier du playbook ou son sous-dossier `files/` — pas dans le `$HOME` général de l'utilisateur. Le fichier avait été créé manuellement dans `~/`, avant l'introduction du playbook, au mauvais endroit pour cette tâche.
+Fix : déplacement du fichier vers `~/EshopOnContainer/ansible/eshop-applicationset-aws.yaml`, chemin attendu par défaut par le module `copy`.
+
+### Incident de capacité — saturation mémoire et disque
+
+**Symptôme**, second run du playbook après un premier run réussi :
+```
+fatal: [13.60.68.91]: FAILED! => {"stderr": "Unable to connect to the server: net/http: TLS handshake timeout"}
+```
+
+**Diagnostic méthodique :**
+```bash
+free -h   # available 63Mi seulement
+top -o %MEM   # k3s-server : 50% de la RAM, load average 8.03 sur 2 vCPU
+df -h /   # 85% d'usage disque (volume EBS 8 Go par défaut)
+```
+Les logs K3s confirmaient via des entrées `"Slow SQL"` répétées, signe que même la base SQLite interne du control plane peinait sous la pression mémoire.
+
+**Actions correctives, dans l'ordre :**
+
+1. **Swap comme filet de sécurité** :
+```bash
+sudo fallocate -l 2G /swapfile   # échec partiel par manque d'espace disque, 1.2G effectifs
+sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+```
+2. **Désactivation des composants ArgoCD non essentiels** :
+```bash
+sudo k3s kubectl scale deployment argocd-dex-server -n argocd --replicas=0
+sudo k3s kubectl scale deployment argocd-notifications-controller -n argocd --replicas=0
+```
+SSO (`dex-server`) et notifications ne sont pas nécessaires pour un `ApplicationSet` simple — leur désactivation libère de la mémoire sans impact fonctionnel.
+3. Réduction de charge applicative (suppression de `catalog-api`) **envisagée mais finalement non nécessaire** — le système s'est stabilisé après les deux premières actions.
+
+**Résultat après stabilisation :**
+```bash
+free -h    # available 301Mi (contre 63Mi avant), swap 589Mi utilisés sur 1.2Gi
+top        # load average 0.43 (contre 8.03 avant)
+sudo k3s kubectl get applications -n argocd
+# catalog-api   Synced   Healthy
+# postgres      Synced   Healthy
+```
+Le swap a absorbé l'essentiel de la pression, permettant au système de retrouver un état stable sans intervention plus radicale (pas besoin de sacrifier `catalog-api`).
+
+### Piliers consolidés durant cette étape
+
+| Concept | Application |
+|---|---|
+| **Diagnostic méthodique d'une saturation ressources** | `free -h` → `top -o %MEM` → `df -h` → identification du processus dominant — méthode transposable à tout incident de capacité, indépendamment de la techno concernée. |
+| **Swap comme filet de sécurité, jamais une solution de prod** | Efficace pour absorber un pic ponctuel en environnement de test contraint, inadapté comme stratégie permanente en production. |
+| **Réduction de charge par désactivation de composants non essentiels** | `dex-server`/`notifications-controller` désactivés sans impact fonctionnel — n'activer que ce dont on a réellement besoin, particulièrement pertinent sur infrastructure contrainte. |
+| **Un incident de sécurité peut avoir des conséquences en cascade** | La restriction Free Tier (conséquence de l'incident de clé compromise de la branche précédente) a directement limité la taille d'instance disponible, provoquant indirectement cet incident de capacité. |
+| **Chemin de recherche des fichiers du module `copy`** | Le control node Ansible cherche les fichiers sources relativement au playbook, jamais dans le `$HOME` général. |
+
+---
+
+## 🏆 Bilan de l'ensemble de cette branche AWS
+
+Infrastructure complète provisionnée et configurée de façon reproductible :
+1. **Terraform** — VPC, subnets, EC2, Security Groups
+2. **Ansible** — installation K3s et ArgoCD, idempotente, rejouable
+3. **ArgoCD** — GitOps sur cluster cloud, sous-ensemble adapté aux contraintes de ressources
+4. **Deux incidents réels traités de bout en bout** — sécurité (clé compromise) et capacité (saturation mémoire/disque), chacun diagnostiqué à sa cause racine avant correction
+
+Cette séquence complète — provisioning, configuration, déploiement, incident de sécurité, incident de capacité, résolution méthodique de chacun — constitue une pièce de portfolio particulièrement riche : elle démontre une compétence de troubleshooting réel, pas seulement la capacité à suivre une procédure qui fonctionne du premier coup.
 
 ---
 
