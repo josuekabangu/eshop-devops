@@ -23,9 +23,18 @@ module "networking" {
 
 module "ec2" {
     source = "./ec2"
-    
+
     vpc_id        = module.networking.vpc_id
     subnet_id     = module.networking.public_subnet_ids[0]
     my_ip         = var.my_ip
-    instance_type = var.instance_type        
+    instance_type = var.instance_type
+}
+
+module "rds" {
+  source = "./rds"
+
+  vpc_id                 = module.networking.vpc_id
+  private_subnet_ids     = module.networking.private_subnet_ids
+  ec2_security_group_id  = module.ec2.security_group_id
+  db_password             = var.db_password
 }

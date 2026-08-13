@@ -15,3 +15,12 @@ output "private_subnet_ids" {
 output "instance_public_ip" {
     value = module.ec2.public_ip
 }
+
+# RDS Output
+output "db_endpoint" {
+  value = module.rds.db_endpoint
+}
+
+output "db_name" {
+  value = module.rds.db_name
+}
