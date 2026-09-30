@@ -171,16 +171,4 @@ sudo k3s crictl pull localhost:5000/catalog-api:latest
 
 ---
 
-## 🧠 Piliers consolidés durant cette étape
-
-| Concept | Application ici |
-|---|---|
-| **Immuabilité / build once, deploy many** | Le registre est le point de passage obligé entre "image construite" et "image déployée" — sans lui, chaque environnement devrait rebuilder, cassant la garantie d'identité entre ce qui a été testé et ce qui tourne réellement. |
-| **Interne vs externe (DNS)** | Troisième occurrence de ce principe depuis le début du parcours (Identity-API, puis ce registre) — un nom de service Docker/K8s n'a de sens qu'entre composants du même réseau, jamais côté client humain. |
-| **GitOps** | Le fichier `registry/docker-compose.yml`, versionné et séparé du compose applicatif, rend la configuration du registre reproductible sur n'importe quelle nouvelle VM. |
-
----
-
-## 🔜 Prochaine étape
-
-Configuration de `registries.yaml` pour K3s, vérification du `pull` depuis le cluster, puis écriture du `Deployment` complet de `catalog-api` référençant `localhost:5000/catalog-api:latest`.
+Le registre reste le point de passage obligé entre "image construite" et "image déployée" — sans lui, chaque environnement devrait rebuilder, cassant la garantie d'identité entre ce qui a été testé et ce qui tourne réellement. Même principe interne/externe déjà rencontré sur Identity-API : un nom de service Docker/K8s n'a de sens qu'entre composants du même réseau, jamais côté client humain.

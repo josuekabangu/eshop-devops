@@ -173,18 +173,6 @@ webhooks-api        Synced        Healthy
 
 ---
 
-## Piliers consolidés
-
-| Concept | Application |
-|---|---|
-| **GitOps — Git comme unique source de vérité** | Toute modification de la stack passe désormais par un commit/push, plus jamais par un `kubectl`/`helm` manuel sur le cluster de référence. |
-| **`selfHeal` = Configuration Drift automatiquement corrigé** | Concept défini en théorie dès la Phase 1 (Vagrant), désormais appliqué de façon opérationnelle et automatique à l'échelle du cluster entier. |
-| **Générateur de répertoires comme équivalent GitOps de la `matrix` CI** | Même principe transversal : une définition, N instances générées, maintenance centralisée — appliqué une seconde fois dans ce parcours, cette fois côté déploiement plutôt que build. |
-| **Diagnostic d'échec partiel dans une installation complexe** | Un `kubectl apply` sur un manifest volumineux peut échouer partiellement sans que le résultat global semble en erreur — lire la sortie complète, pas uniquement sa conclusion apparente. |
-| **`--server-side` comme solution aux limites de `kubectl apply` classique** | Connaissance pratique directement issue d'un vrai bug rencontré — utile pour tout futur CRD volumineux. |
-
----
-
 ## 🏆 Bilan de l'ensemble du parcours DevOps
 
 | Phase | Réalisation |
@@ -196,8 +184,4 @@ webhooks-api        Synced        Healthy
 | **Packaging** | 12 charts Helm, templating complet, résolution structurelle du problème `${VAR}` |
 | **GitOps** | ArgoCD + `ApplicationSet`, synchronisation et auto-correction automatiques |
 
-Chaque étape a été traitée avec la même discipline : diagnostic de cause racine avant correction, vérification systématique avant application réelle, documentation de chaque dette technique assumée plutôt que silencieuse.
-
----
-
-*Document — Méthode Josue, Mentor DevOps Senior.*
+Méthode appliquée à chaque étape : diagnostic de cause racine avant correction, vérification systématique avant application réelle, dette technique documentée plutôt que passée sous silence.

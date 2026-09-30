@@ -1,13 +1,12 @@
 # eShop DevOps — Roadmap Junior to Senior
 
-**Méthode Josue — Mentor DevOps Senior**
-Projet central de la roadmap 12 mois vers Senior DevOps / Platform Engineer.
+Projet central de ma roadmap 12 mois vers Senior DevOps / Platform Engineer.
 
 ---
 
 ## 🎯 Objectif du projet
 
-Prendre l'application de référence [dotnet/eShop](https://github.com/dotnet/eShop) et construire, à la main puis en l'automatisant progressivement, une chaîne DevOps complète : conteneurisation, orchestration Kubernetes, CI/CD, packaging Helm, GitOps, Infrastructure as Code et configuration management sur un vrai cloud (AWS). Rôle 100% infrastructure — zéro ligne de code applicatif écrite, uniquement consommée telle quelle.
+Prendre l'application de référence [dotnet/eShop](https://github.com/dotnet/eShop) et construire, à la main puis en l'automatisant progressivement, une chaîne DevOps complète : conteneurisation, orchestration Kubernetes, CI/CD, packaging Helm, GitOps, Infrastructure as Code, configuration management sur un vrai cloud (AWS), et observabilité. Rôle 100% infrastructure — zéro ligne de code applicatif écrite, uniquement consommée telle quelle.
 
 ---
 
@@ -26,6 +25,9 @@ Prendre l'application de référence [dotnet/eShop](https://github.com/dotnet/eS
 │  │                            webhooks-api / webhook-client │   │
 │  │                            / order-processor /           │   │
 │  │                            payment-processor / webapp    │   │
+│  │                                                            │   │
+│  │  Observabilité (namespace observability)                 │   │
+│  │  Prometheus + Grafana (:30300) + Loki + Promtail          │   │
 │  └──────────────────────────────────────────────────────┘   │
 │                                                                │
 │  ArgoCD (GitOps) + ApplicationSet (12 composants)             │
@@ -78,6 +80,7 @@ Prendre l'application de référence [dotnet/eShop](https://github.com/dotnet/eS
 | Registre d'images | GitHub Container Registry (ghcr.io) |
 | Infrastructure as Code | Terraform (modules `networking`, `ec2`, `rds`) |
 | Configuration management | Ansible (installation K3s + ArgoCD, idempotent) |
+| Observabilité | Prometheus, Grafana, Loki, Promtail (charts communautaires) |
 | Cloud | AWS (VPC, EC2, RDS, IAM) |
 | Application | .NET 10, PostgreSQL (pgvector), RabbitMQ, Redis |
 
@@ -123,6 +126,10 @@ EshopOnContainer/
 │   ├── k3s-install.yml           # installation K3s idempotente
 │   ├── argocd-install.yml        # installation ArgoCD + ApplicationSet AWS
 │   └── eshop-applicationset-aws.yaml
+├── observability/
+│   ├── OBSERVABILITY.md          # doc — Prometheus/Grafana/Loki, bug datasource
+│   ├── prometheus-values.yaml    # Prometheus + Grafana (kube-prometheus-stack)
+│   └── loki-values.yaml          # Loki + Promtail (loki-stack)
 └── DEVOPS.md                    # index racine — stack, piliers, roadmap à jour
 ```
 
@@ -130,6 +137,7 @@ EshopOnContainer/
 - Déploiement K8s local → `helm/*`, appliqué via ArgoCD (`argocd/eshop-applicationset.yaml`)
 - Infrastructure AWS → `terraform/*`, appliqué via `terraform apply`
 - Configuration serveur AWS → `ansible/*`, appliqué via `ansible-playbook`
+- Observabilité → `observability/*`, appliqué via `helm install`/`upgrade`
 
 `docker-compose.yml` et `k8s/*.yaml` bruts sont des références historiques, conservées pour la documentation — ne plus les modifier pour faire évoluer un déploiement réel.
 
@@ -151,6 +159,7 @@ Chaque grande étape a sa doc colocalisée avec le code qu'elle décrit — pas 
 | [argocd/ARGOCD.md](argocd/ARGOCD.md) | Installation ArgoCD, `ApplicationSet`, bug CRD, bilan final |
 | [terraform/TERRAFORM.md](terraform/TERRAFORM.md) | IaC — fondamentaux Terraform, pilote AWS S3, modules `networking`/`ec2`/`rds` complets, isolation réseau validée par preuve fonctionnelle |
 | [ansible/ANSIBLE.md](ansible/ANSIBLE.md) | Config management — K3s + ArgoCD idempotents sur EC2, incident de sécurité (clé AWS) et incident de capacité (RAM/disque) résolus |
+| [observability/OBSERVABILITY.md](observability/OBSERVABILITY.md) | Mini-cours 3 piliers, installation Prometheus/Grafana/Loki, bug de conflit de datasources (`isDefault`), premiers insights de consommation réelle des composants eShop |
 
 ---
 
@@ -161,12 +170,16 @@ Chaque grande étape a sa doc colocalisée avec le code qu'elle décrit — pas 
 | Secrets dupliqués entre charts Helm | Mots de passe en dur dans plusieurs `values.yaml` | Gestionnaire de secrets externe (Vault, AWS Secrets Manager) |
 | `docker-entrypoint-initdb.d` pour la création des bases | Provisioning couplé au cycle de vie du StatefulSet Postgres | `Job` Kubernetes dédié |
 | Probes `tcpSocket` plutôt que health check applicatif réel | Ne vérifie que l'ouverture du port | Endpoint `/readyz` minimal, non conditionné à `Development` |
-| Packages GHCR publics | Pas d'authentification requise pour puller les images | `imagePullSecret` + packages privés |
-| Tag `latest` dans les manifests Helm | Pas de garantie de version figée | Référencer le SHA du commit |
+| Packages GHCR publics | Pas d'authentification requise pour puller les images | `imagePullSecret` + packages privés — câblage Helm (`values.yaml`/`deployment.yaml` des 9 charts) déjà conçu, reste à appliquer : rendre les packages privés côté GitHub + générer un PAT + créer le secret K8s |
+| Tag `latest` dans les manifests Helm | Pas de garantie de version figée | Référencer le SHA du commit — job CI `update-helm-tags` (bump automatique après build, commit `[skip ci]`) déjà conçu, reste à appliquer dans `build-push-all.yml` |
+| Aucune vérification CI sur le code Terraform | `terraform fmt`/`validate` jamais exécutés avant merge | Workflow `terraform-checks.yml` sur PR (`fmt -check` + `validate`, sans `plan` tant que le state est local) déjà conçu, reste à ajouter dans `.github/workflows/` |
 | State Terraform local (`terraform.tfstate`) | Pas de verrouillage, pas de partage d'équipe | Backend distant S3 + verrouillage DynamoDB |
 | `skip_final_snapshot = true` sur RDS | Aucun snapshot conservé à la destruction | À retirer avant tout scénario proche de la production |
 | Module Terraform `rds` désactivé sur AWS | Non utilisé pour le test K3s-sur-EC2 (RDS externe redondant avec le Postgres interne au cluster) | Réactiver pour explorer une architecture avec base externalisée |
 | Instance EC2 sous-dimensionnée pour la stack complète | `t3.small` (2 Go) ne supporte qu'un sous-ensemble d'eShop | Instance plus grande une fois la restriction Free Tier levée |
+| `adminPassword` Grafana en clair dans `prometheus-values.yaml` | Mot de passe admin non géré via Secret | Référencer un `Secret` Kubernetes existant plutôt qu'une valeur en dur |
+| Alerting Prometheus désactivé | `alertmanager.enabled: false` | Activer une fois les dashboards de base bien maîtrisés |
+| Tracing distribué non implémenté | Pilier "traces" de l'observabilité non couvert | Instrumenter le code via .NET Aspire natif ou Tempo/Jaeger |
 
 ---
 
@@ -178,6 +191,9 @@ Une clé d'accès IAM a été exposée (collée en chat, committée dans `TERRAF
 ### Incident de capacité — saturation mémoire/disque sur EC2
 Le cluster K3s + ArgoCD + applications a saturé la RAM (2 Go) et approché la limite disque (8 Go) d'une instance `t3.small`. Diagnostic via `free`/`top`/`df`, résolution par ajout de swap, désactivation de composants ArgoCD non essentiels (dex-server, notifications-controller). Détail complet : `ansible/ANSIBLE.md`.
 
+### Incident applicatif — CrashLoopBackOff Grafana (conflit de datasources)
+Deux `ConfigMap` de datasources marqués `isDefault: true` simultanément (Prometheus + Loki, ce dernier créé automatiquement malgré `grafana.enabled: false`) ont bloqué le démarrage complet de Grafana en cascade. Diagnostic réalisé via export PDF suite à des difficultés de transmission de logs en texte brut. Détail complet : `observability/OBSERVABILITY.md`.
+
 ---
 
 ## 🚀 Démarrage rapide
@@ -188,7 +204,7 @@ vagrant up
 vagrant ssh
 kubectl get applications -n argocd   # 12 composants Synced/Healthy
 ```
-Accès : `http://192.168.56.11:5100` (webapp), `:5223` (identity-api), `:5114` (webhook-client)
+Accès : `http://192.168.56.11:5100` (webapp), `:5223` (identity-api), `:5114` (webhook-client), `:30300` (Grafana)
 
 ### Infrastructure AWS (Terraform + Ansible)
 ```bash
@@ -200,8 +216,22 @@ cd ../ansible
 ansible-playbook -i inventory.ini k3s-install.yml --user ubuntu --private-key ~/.ssh/eshop-aws-key
 ansible-playbook -i inventory.ini argocd-install.yml --user ubuntu --private-key ~/.ssh/eshop-aws-key
 ```
+⚠️ Toujours détruire après usage : `terraform destroy -var="my_ip=$(curl -s ifconfig.me)"`
 
-⚠️ Toujours détruire après usage pour éviter toute facturation : `terraform destroy -var="my_ip=$(curl -s ifconfig.me)"`
+### Observabilité
+```bash
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+helm repo add grafana https://grafana.github.io/helm-charts
+helm repo update
+
+helm install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
+  -n observability --create-namespace -f observability/prometheus-values.yaml
+helm install loki grafana/loki-stack -n observability -f observability/loki-values.yaml
+```
+Grafana : `http://192.168.56.11:30300` — mot de passe admin :
+```bash
+kubectl get secret --namespace observability -l app.kubernetes.io/component=admin-secret -o jsonpath="{.items[0].data.admin-password}" | base64 --decode
+```
 
 ---
 
@@ -210,10 +240,6 @@ ansible-playbook -i inventory.ini argocd-install.yml --user ubuntu --private-key
 | Phase | Focus | Statut |
 |---|---|---|
 | **Ph1** — GitOps & CI/CD | Docker, K8s manuel, CI, GitOps | ✅ Complétée et dépassée |
-| **Ph2** — Infra & Observabilité | Terraform, Ansible, stack d'observabilité | 🔄 En cours — Terraform et Ansible faits, observabilité à venir |
-| **Ph3** — Platform & AI Infra | Claude Code, certifications (CKA, CKS, Terraform Associate, AWS DevOps Pro) | À venir |
+| **Ph2** — Infra & Observabilité | Terraform, Ansible, stack d'observabilité | ✅ Complétée (Terraform, Ansible, Prometheus/Grafana/Loki) |
+| **Ph3** — Certifications & Plateforme | CKA, CKS, Terraform Associate, AWS DevOps Pro | 🔄 Prochaine étape |
 | **Ph4** — SRE & Portfolio | Chaos Engineering, articles, entretiens | À venir |
-
----
-
-*Méthode Josue — Mentor DevOps Senior.*

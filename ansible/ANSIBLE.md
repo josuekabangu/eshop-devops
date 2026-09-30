@@ -30,12 +30,12 @@ Le bloc `user_data` d'une instance EC2 s'exécute **une seule fois**, au tout pr
 
 ### Concepts clés
 
-| Concept | Rôle | Équivalent déjà connu |
-|---|---|---|
-| **Playbook** | Fichier YAML décrivant une suite de tâches | Un chart Helm, mais pour configurer un serveur |
-| **Inventory** | Liste des machines cibles | Le `values.yaml` qui dit "où" appliquer la config |
-| **Module** | Action réutilisable (`apt`, `shell`, `wait_for`...) | Un `resource` Terraform, pour l'intérieur d'un serveur |
-| **Idempotence** | Vérification de l'état avant action, rejouable sans effet de bord si rien n'a changé | Principe déjà rencontré depuis Vagrant, Helm, Terraform |
+| Concept | Rôle |
+|---|---|
+| **Playbook** | Fichier YAML décrivant une suite de tâches |
+| **Inventory** | Liste des machines cibles |
+| **Module** | Action réutilisable (`apt`, `shell`, `wait_for`...) |
+| **Idempotence** | Vérification de l'état avant action, rejouable sans effet de bord si rien n'a changé |
 
 Ansible se connecte à distance en SSH — aucun agent à installer sur la machine cible, contrairement à des outils comme Puppet ou Chef.
 
@@ -170,22 +170,10 @@ En parallèle de la mise en place de Terraform, une clé d'accès AWS (`terrafor
 
 **Conséquence indirecte observée :** après résolution de l'incident, le compte AWS s'est retrouvé temporairement restreint aux types d'instance éligibles au Free Tier strict (`t3.micro`, `t3.small`, `t4g.micro`/`small`, entre autres) — `t3.medium` initialement prévu pour l'instance K3s a dû être ajusté en `t3.small`, mesure de protection probable consécutive à la détection de compromission.
 
-**Principe consolidé :** toute clé/secret exposé dans un canal non éphémère doit être traité comme définitivement compromis, indépendamment de sa visibilité publique effective — la détection automatique par AWS confirme empiriquement ce principe déjà appliqué depuis un incident similaire (token GitHub collé en clair, plusieurs sessions plus tôt dans ce parcours).
+**Principe consolidé :** toute clé/secret exposé dans un canal non éphémère doit être traité comme définitivement compromis, indépendamment de sa visibilité publique effective — la détection automatique par AWS confirme empiriquement ce principe, déjà appliqué depuis un incident similaire (token GitHub collé en clair, plus tôt dans ce projet).
 
 ---
 
-## 🧠 Piliers consolidés
-
-| Concept | Application |
-|---|---|
-| **Ansible complète Terraform, ne le remplace pas** | Séparation nette : Terraform pour l'existence des ressources, Ansible pour leur configuration interne — deux responsabilités distinctes. |
-| **Sécurité par conception dans les dossiers partagés** | Ansible refuse un `ansible.cfg` dans un dossier world-writable — comportement volontaire à respecter, pas un obstacle à contourner sans réflexion. |
-| **Preuve d'idempotence par comparaison de deux exécutions** | `changed` puis `ok` sur deux runs successifs constitue la démonstration la plus rigoureuse — un seul run ne suffit jamais à prouver l'idempotence. |
-| **Traitement systématique de toute exposition de secret** | Révocation immédiate, nettoyage de l'état courant, réécriture de l'historique Git — les trois étapes appliquées intégralement, cohérentes avec la doctrine de sécurité déjà établie dans ce projet. |
-
----
-
-<<<<<<< HEAD
 ## Ansible + ArgoCD sur AWS — déploiement et résolution d'incident de capacité
 
 Extension du module Ansible à l'installation d'ArgoCD et au déploiement d'un sous-ensemble d'eShop (`postgres` + `catalog-api`) sur l'instance EC2 `t3.small` (2 Go RAM), dans les limites du Free Tier restreint suite à l'incident de sécurité de la branche précédente.
@@ -262,17 +250,7 @@ sudo k3s kubectl get applications -n argocd
 # catalog-api   Synced   Healthy
 # postgres      Synced   Healthy
 ```
-Le swap a absorbé l'essentiel de la pression, permettant au système de retrouver un état stable sans intervention plus radicale (pas besoin de sacrifier `catalog-api`).
-
-### Piliers consolidés durant cette étape
-
-| Concept | Application |
-|---|---|
-| **Diagnostic méthodique d'une saturation ressources** | `free -h` → `top -o %MEM` → `df -h` → identification du processus dominant — méthode transposable à tout incident de capacité, indépendamment de la techno concernée. |
-| **Swap comme filet de sécurité, jamais une solution de prod** | Efficace pour absorber un pic ponctuel en environnement de test contraint, inadapté comme stratégie permanente en production. |
-| **Réduction de charge par désactivation de composants non essentiels** | `dex-server`/`notifications-controller` désactivés sans impact fonctionnel — n'activer que ce dont on a réellement besoin, particulièrement pertinent sur infrastructure contrainte. |
-| **Un incident de sécurité peut avoir des conséquences en cascade** | La restriction Free Tier (conséquence de l'incident de clé compromise de la branche précédente) a directement limité la taille d'instance disponible, provoquant indirectement cet incident de capacité. |
-| **Chemin de recherche des fichiers du module `copy`** | Le control node Ansible cherche les fichiers sources relativement au playbook, jamais dans le `$HOME` général. |
+Le swap a absorbé l'essentiel de la pression, permettant au système de retrouver un état stable sans intervention plus radicale (pas besoin de sacrifier `catalog-api`). Diagnostic transposable à tout incident de capacité : `free -h` → `top -o %MEM` → `df -h` → identification du processus dominant. Le swap reste un filet de sécurité pour absorber un pic ponctuel, jamais une stratégie permanente en production. La restriction Free Tier consécutive à l'incident de clé compromise (branche précédente) a directement limité la taille d'instance disponible — un incident de sécurité peut avoir des conséquences en cascade sur des décisions d'infrastructure ultérieures.
 
 ---
 
@@ -283,14 +261,3 @@ Infrastructure complète provisionnée et configurée de façon reproductible :
 2. **Ansible** — installation K3s et ArgoCD, idempotente, rejouable
 3. **ArgoCD** — GitOps sur cluster cloud, sous-ensemble adapté aux contraintes de ressources
 4. **Deux incidents réels traités de bout en bout** — sécurité (clé compromise) et capacité (saturation mémoire/disque), chacun diagnostiqué à sa cause racine avant correction
-
-Cette séquence complète — provisioning, configuration, déploiement, incident de sécurité, incident de capacité, résolution méthodique de chacun — constitue une pièce de portfolio particulièrement riche : elle démontre une compétence de troubleshooting réel, pas seulement la capacité à suivre une procédure qui fonctionne du premier coup.
-=======
-## 🔜 Prochaine étape
-
-Reprise du déploiement applicatif sur ce cluster AWS : installation d'ArgoCD, `ApplicationSet` limité à `postgres` + `catalog-api` (sous-ensemble adapté à la RAM disponible sur `t3.small`, ~2 Go).
->>>>>>> 886310e5d247f2e87c18fdb1540144e302f57bdb
-
----
-
-*Document — Méthode Josue, Mentor DevOps Senior.*

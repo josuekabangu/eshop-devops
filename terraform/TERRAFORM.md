@@ -18,18 +18,16 @@ Terraform est un outil d'**Infrastructure as Code (IaC)** : l'infrastructure (se
 
 ### Le problème résolu
 
-Sans IaC, le provisionnement se fait à la main (console web — lent, non reproductible, non versionnable) ou via des scripts impératifs (CLI — décrit des étapes, pas un état final, aucune détection de dérive).
-
-**Parallèle direct avec l'expérience déjà acquise sur ce projet :** le même écart qu'entre `kubectl apply` (impératif) et Helm + `values.yaml` (déclaratif) — Terraform applique cette philosophie à l'échelle du cloud lui-même, pas seulement à Kubernetes.
+Sans IaC, le provisionnement se fait à la main (console web — lent, non reproductible, non versionnable) ou via des scripts impératifs (CLI — décrit des étapes, pas un état final, aucune détection de dérive). Même écart qu'entre `kubectl apply` (impératif) et Helm + `values.yaml` (déclaratif) — Terraform applique cette philosophie à l'échelle du cloud lui-même, pas seulement à Kubernetes.
 
 ### Les 4 concepts fondamentaux
 
-| Concept | Définition | Équivalent déjà connu |
-|---|---|---|
-| **Provider** | Plugin qui dialogue avec un cloud précis (`aws`, `azurerm`, `google`) | Un chart Helm parle à l'API K8s ; un provider Terraform parle à l'API AWS |
-| **Resource** | Objet d'infrastructure déclaré (`aws_s3_bucket`, `aws_instance`) | Un objet K8s (`Deployment`, `Service`) |
-| **State** (`terraform.tfstate`) | Trace de ce que Terraform a réellement créé | Le suivi qu'ArgoCD fait entre Git et le cluster, sauf que Terraform tient ce registre lui-même |
-| **Plan / Apply** | `plan` prévisualise sans agir, `apply` exécute | `helm template` (plan) vs `helm install` (apply) |
+| Concept | Définition |
+|---|---|
+| **Provider** | Plugin qui dialogue avec un cloud précis (`aws`, `azurerm`, `google`) — le rôle qu'un chart Helm joue vis-à-vis de l'API K8s, transposé à l'API AWS |
+| **Resource** | Objet d'infrastructure déclaré (`aws_s3_bucket`, `aws_instance`), équivalent d'un objet K8s (`Deployment`, `Service`) |
+| **State** (`terraform.tfstate`) | Trace de ce que Terraform a réellement créé |
+| **Plan / Apply** | `plan` prévisualise sans agir, `apply` exécute — même distinction que `helm template` vs `helm install` |
 
 ### Cycle de vie
 
@@ -181,20 +179,7 @@ terraform plan -destroy  # prévisualisation de la suppression avant action rée
 terraform destroy    # suppression confirmée (saisie "yes"), nettoyage complet
 ```
 
-**Résultat :** cycle complet validé, bucket créé puis proprement détruit, aucune ressource résiduelle facturable.
-
-**Bonne pratique appliquée spontanément :** `terraform plan -destroy` avant `terraform destroy` — reproduction du réflexe "prévisualiser avant d'agir" déjà acquis avec `helm template`/`helm lint` avant tout déploiement réel, appliqué ici sans consigne explicite.
-
----
-
-## 🧠 Piliers consolidés
-
-| Concept | Application |
-|---|---|
-| **Idempotence** | `terraform plan` répété sans modification retourne `No changes` — même principe que `kubectl apply` répété sans effet observé depuis la Phase 1. |
-| **Rafraîchissement systématique de l'état** | `Refreshing state...` avant chaque commande — Terraform vérifie la réalité AWS avant de calculer un diff, esprit proche du `selfHeal` ArgoCD (détection de dérive), version "vérifier avant d'agir" plutôt que "corriger en continu". |
-| **Vérification côté provider réel, pas seulement le state local** | `aws s3 ls` en complément de `terraform output` — ne jamais faire confiance uniquement à l'outil, vérifier la source de vérité externe, principe transversal à tout ce projet (Kubernetes, Helm, ArgoCD, maintenant Terraform). |
-| **Erreur de manipulation de credentials structurés** | Toujours extraire la valeur précise d'un fichier CSV/structuré, jamais copier une ligne entière par réflexe. |
+**Résultat :** cycle complet validé, bucket créé puis proprement détruit, aucune ressource résiduelle facturable. `terraform plan -destroy` avant `terraform destroy` — même réflexe "prévisualiser avant d'agir" que `helm template`/`helm lint` avant tout déploiement réel. `Refreshing state...` avant chaque commande confirme que Terraform revérifie la réalité AWS avant de calculer un diff, plutôt que de se fier aveuglément au `.tfstate` local — `aws s3 ls` en complément de `terraform output` sert le même objectif : ne jamais faire confiance uniquement à l'outil, vérifier la source de vérité externe.
 
 ---
 
@@ -204,7 +189,7 @@ Premier module Terraform structuré du projet, suite au pilote S3. Adoption de l
 
 ### Modules Terraform — le concept
 
-Un module est un ensemble de fichiers `.tf` regroupés dans un dossier, formant une unité **réutilisable et autonome** — équivalent direct d'un chart Helm : un dossier avec sa propre logique interne (`main.tf` ≈ `templates/`, `variables.tf` ≈ `values.yaml`, `outputs.tf` ≈ les valeurs exposées vers l'extérieur).
+Un module est un ensemble de fichiers `.tf` regroupés dans un dossier, formant une unité **réutilisable et autonome**, avec sa propre logique interne : `main.tf` (ce qui est créé), `variables.tf` (ce qui est paramétrable), `outputs.tf` (ce qui est exposé vers l'extérieur).
 
 ### Isolation de portée — piège rencontré et corrigé
 
@@ -263,7 +248,7 @@ resource "aws_subnet" "public" {
   tags = { Name = "eshop-public-${count.index + 1}" }
 }
 ```
-`count = length(...)` : Terraform crée autant d'instances que d'éléments dans la liste (2 CIDR → 2 subnets) — mécanisme de boucle équivalent au `{{ range }}` Helm rencontré sur le ConfigMap Postgres. `count.index` vaut `0` puis `1` à chaque itération, piochant respectivement `10.0.1.0/24` puis `10.0.2.0/24`, et `eu-north-1a` puis `eu-north-1b` — répartition sur 2 datacenters physiquement distincts. `map_public_ip_on_launch` : toute instance EC2 lancée ici reçoit automatiquement une IP publique.
+`count = length(...)` : Terraform crée autant d'instances que d'éléments dans la liste (2 CIDR → 2 subnets) — même logique de boucle que le `{{ range }}` Helm rencontré sur le ConfigMap Postgres. `count.index` vaut `0` puis `1` à chaque itération, piochant respectivement `10.0.1.0/24` puis `10.0.2.0/24`, et `eu-north-1a` puis `eu-north-1b` — répartition sur 2 datacenters physiquement distincts. `map_public_ip_on_launch` : toute instance EC2 lancée ici reçoit automatiquement une IP publique.
 
 **`aws_route_table.public`** — le plan de circulation :
 ```hcl
@@ -329,16 +314,7 @@ terraform apply  # confirmation "yes"
 ```bash
 aws ec2 describe-vpcs --filters "Name=tag:Name,Values=eshop-vpc"
 ```
-Confirme le VPC (`vpc-067f4d50456b055b6`), CIDR `10.0.0.0/16`, tags corrects — réflexe de vérification déjà appliqué spontanément sur le pilote S3.
-
-### Piliers consolidés durant cette étape
-
-| Concept | Application |
-|---|---|
-| **Modules = réutilisabilité et isolation** | Équivalent direct d'un chart Helm — structure, portée de variables, communication via outputs explicites. |
-| **Boucle Terraform (`count` + indexation)** | Même principe transversal que `{{ range }}` Helm et la `matrix` GitHub Actions — une définition, N instances. |
-| **La route table définit le caractère "public" d'un subnet, pas le subnet lui-même** | Distinction conceptuelle clé pour toute architecture réseau AWS future. |
-| **Communication inter-modules via outputs** | Un module ne peut consommer ce qu'un autre expose que via des `outputs.tf` explicites — jamais d'accès implicite entre modules. |
+Confirme le VPC (`vpc-067f4d50456b055b6`), CIDR `10.0.0.0/16`, tags corrects — même réflexe de vérification que sur le pilote S3 (`aws s3 ls`).
 
 ---
 
@@ -348,14 +324,14 @@ Deuxième module Terraform, consommant les outputs du module `networking` — pr
 
 ### Amazon EC2 — les fondamentaux
 
-EC2 loue un serveur virtuel dans un datacenter AWS — l'équivalent cloud de la VM Vagrant utilisée depuis le début du parcours, mais hébergé chez AWS plutôt que localement.
+EC2 loue un serveur virtuel dans un datacenter AWS — l'équivalent cloud de la VM Vagrant utilisée en local, mais hébergé chez AWS plutôt que sur la machine hôte.
 
-| Concept | Définition | Équivalent déjà connu |
-|---|---|---|
-| **AMI** | Image de base du serveur (OS + logiciels préinstallés) | Une image Docker, mais pour une VM entière |
-| **Instance Type** | Taille de la machine (CPU, RAM), ex: `t3.micro` | `resources.requests/limits` d'un Deployment K8s |
-| **Security Group** | Pare-feu virtuel attaché à l'instance | Rôle qu'un `NetworkPolicy` jouerait en K8s |
-| **Key Pair** | Paire de clés SSH pour authentification, jamais de mot de passe | Le SSH déjà utilisé pour se connecter à la VM Vagrant |
+| Concept | Définition |
+|---|---|
+| **AMI** | Image de base du serveur (OS + logiciels préinstallés) — comparable à une image Docker, mais pour une VM entière |
+| **Instance Type** | Taille de la machine (CPU, RAM), ex: `t3.micro` |
+| **Security Group** | Pare-feu virtuel attaché à l'instance |
+| **Key Pair** | Paire de clés SSH pour authentification, jamais de mot de passe |
 
 **Principe de sécurité — moindre privilège réseau :** l'accès SSH est restreint à l'IP publique personnelle uniquement (`${var.my_ip}/32`), jamais `0.0.0.0/0`. Cette IP (obtenue via `curl -s ifconfig.me`) peut être dynamique — un `terraform apply -var="my_ip=..."` avec la nouvelle valeur est nécessaire si elle change entre deux sessions. `my_ip` n'a volontairement **aucune valeur par défaut** dans `variables.tf` — force une saisie explicite à chaque déploiement, évitant qu'une valeur ouverte soit laissée par erreur.
 
@@ -497,16 +473,6 @@ ssh -i ~/.ssh/eshop-aws-key ubuntu@16.16.67.108
 ```
 Connexion réussie, IP privée interne confirmée (`10.0.1.55`, cohérente avec le premier subnet public `10.0.1.0/24`) — preuve fonctionnelle complète, pas seulement une validation de plan.
 
-### Piliers consolidés durant cette étape
-
-| Concept | Application |
-|---|---|
-| **Communication inter-modules par outputs** | `ec2` consomme `vpc_id` et `public_subnet_ids` de `networking` sans aucune duplication de valeur. |
-| **Défense en profondeur réseau** | Security Group (couche applicative) + absence de route Internet en subnet privé (couche structurelle) — deux mécanismes indépendants. |
-| **Concevoir pour l'architecture cible complète** | Correction proactive d'une lacune de conception initiale, avant qu'elle ne bloque le futur module `rds`. |
-| **Cohérence de nommage variable/output vs contenu réel** | Un output mal nommé (`_cidrs` contenant des `_ids`) reste fonctionnel mais trompeur — corrigé par principe, pas seulement par nécessité technique. |
-| **Contraintes de validation spécifiques à certains champs AWS** | La regex restrictive sur les descriptions de règles Security Group (mais pas sur la description globale) illustre que les contraintes AWS peuvent être granulaires et inattendues — toujours lire le message d'erreur complet plutôt que de supposer. |
-
 ---
 
 ## Module `rds` — base de données managée, isolée en subnet privé
@@ -622,16 +588,6 @@ timeout 5 bash -c "</dev/tcp/eshop-db.cjcak6acmxd9.eu-north-1.rds.amazonaws.com/
 
 **Cette double preuve (succès depuis la source autorisée, échec depuis une source non autorisée) constitue la validation la plus rigoureuse possible d'une règle de sécurité réseau** — un test unique de succès n'aurait pas suffi à exclure une configuration trop permissive.
 
-### Piliers consolidés durant cette étape
-
-| Concept | Application |
-|---|---|
-| **Sécurité par référence de Security Group plutôt que par IP** | `security_groups = [var.ec2_security_group_id]` — approche robuste pour la communication intra-VPC, indépendante de toute IP changeante. |
-| **Défense en profondeur, validée en pratique** | Security Group + subnet privé + `publicly_accessible = false` — trois couches indépendantes, dont l'efficacité combinée a été prouvée par un test d'échec délibéré, pas seulement par lecture du code. |
-| **Communication inter-modules à plusieurs niveaux** | `rds` consomme simultanément des outputs de `networking` et `ec2` — premier graphe de dépendances à trois modules du projet. |
-| **Validation par preuve négative** | Confirmer qu'un accès *refusé* échoue réellement est aussi important que confirmer qu'un accès *autorisé* réussit. |
-| **Frontières strictes de portée entre modules** | Réaffirmé une seconde fois — aucune ressource n'est accessible hors de son module sans output explicite. |
-
 ---
 
 ## 🏆 Bilan de l'ensemble de la branche Terraform
@@ -642,14 +598,10 @@ timeout 5 bash -c "</dev/tcp/eshop-db.cjcak6acmxd9.eu-north-1.rds.amazonaws.com/
 | `ec2` | Instance, Key Pair, Security Group | Premier serveur applicatif, accès SSH restreint |
 | `rds` | Instance de base de données, DB Subnet Group, Security Group | Base de données managée, isolée en profondeur |
 
-Infrastructure AWS complète provisionnée en Infrastructure as Code, avec architecture modulaire réutilisable, sécurité réseau vérifiée par preuve fonctionnelle (pas seulement déclarative), et documentation exhaustive de chaque bug rencontré.
+Infrastructure AWS provisionnée en Infrastructure as Code, architecture modulaire, sécurité réseau vérifiée par preuve fonctionnelle (pas seulement déclarative).
 
 ---
 
-## 🔜 Prochaine étape
+## Suite
 
-Selon la roadmap Phase 2 : stack d'observabilité (métriques, logs, tracing), ou poursuite Terraform vers un backend distant S3 pour le state — dette technique déjà tracée depuis le pilote initial.
-
----
-
-*Document — Méthode Josue, Mentor DevOps Senior.*
+Stack d'observabilité (métriques, logs, tracing), ou poursuite Terraform vers un backend distant S3 pour le state — dette technique déjà tracée depuis le pilote initial.

@@ -180,15 +180,6 @@ helm install rabbitmq helm/rabbitmq/
 
 **Validation applicative — la preuve la plus solide de cette étape :** dans les logs de démarrage, `user 'eshop_rabbit' authenticated and granted access to vhost '/'` répété **8 fois** — chacun des services applicatifs consommateurs (`catalog-api`, `ordering-api`, `basket-api`, etc.) s'est reconnecté avec succès via les identifiants du nouveau Secret généré par Helm. Une authentification échouée sur l'un de ces 8 services aurait immédiatement révélé un problème d'encodage persistant — c'est la confirmation la plus directe possible que le Bug 1 est réellement résolu.
 
-### Piliers consolidés durant cette étape
-
-| Concept | Application |
-|---|---|
-| **`data` vs `stringData` dans un Secret Kubernetes** | `data` exige un encodage base64 réel (filtre Helm `b64enc` si généré dynamiquement) ; `stringData` accepte du texte brut et délègue l'encodage à Kubernetes — choix à faire consciemment. |
-| **Cohérence de style à travers les charts d'un même projet** | Mélanger `data`/`stringData` selon les charts complique la maintenance — un standard choisi une fois doit être appliqué partout. |
-| **Bug de référence syntaxiquement valide mais sémantiquement incorrect** | Un copier-coller référençant la mauvaise clé existante ne déclenche aucune erreur d'outillage — seule la comparaison manuelle du rendu aux valeurs source permet de l'attraper. |
-| **Validation applicative comme preuve la plus forte** | Au-delà de `helm lint`/logs de démarrage, l'authentification réussie de multiples consommateurs externes reste la confirmation la plus fiable qu'une configuration de sécurité fonctionne réellement de bout en bout. |
-
 ---
 
 ## Chart 4 — `redis` (`StatefulSet`, dernier de la stack)
@@ -317,31 +308,6 @@ curl http://192.168.56.11:5223/.well-known/openid-configuration | grep issuer
 ```
 Issuer unique et cohérent, endpoints OAuth/OIDC complets — la conversion Helm préserve intégralement le comportement validé en Phase K8s.
 
-### Piliers consolidés durant cette étape
-
-| Concept | Application |
-|---|---|
-| **Synchronisation structurelle via référence partagée** | `{{ .Values.service.externalPort }}` utilisé à la fois pour le `Service` NodePort et pour `IssuerUri` — élimine par construction un risque qui avait causé un bug réel en Phase 1. |
-| **Bug silencieux sur clé de configuration textuelle** | Une valeur manquante utilisée dans une simple concaténation de chaîne (`http://host:port`) ne produit aucune erreur — vérification explicite de chaque champ nécessaire, pas seulement un test global qui n'aurait pas révélé ce bug précis. |
-| **Distinction entre `Image` et `Image ID`** | `Image` reflète la référence demandée dans le manifest ; `Image ID` peut afficher des artefacts de normalisation du runtime sans impact fonctionnel — savoir lequel fait foi évite un diagnostic erroné. |
-
----
-
-## Piliers consolidés
-
-| Concept | Application |
-|---|---|
-| **Templating réel vs substitution absente** | `{{ .Values.x }}` est exécuté par le moteur Helm avant tout envoi à l'API — contrairement à `${VAR}` qui restait une chaîne morte avec `kubectl apply` brut. |
-| **Changement incrémental et vérifiable** | `helm lint`/`helm template` avant tout `helm install` réel — même discipline de vérification qu'à chaque étape précédente du parcours K8s. |
-| **Un seul gestionnaire d'orchestration par objet** | Ne jamais laisser `kubectl apply` et Helm gérer le même objet nommé — Helm garde un état interne (Secret de release) qui se désynchronise sinon. |
-| **`helm upgrade`/`rollback` comme filet de sécurité** | Historique de révisions consultable et réversible, absent avec des `kubectl apply` bruts successifs. |
-| **Persistance des PVC indépendante du cycle de vie Helm** | `volumeClaimTemplates` échappe à la gestion directe de Helm — comportement à connaître pour ne pas le confondre avec un bug. |
-| **Trois variantes distinctes d'échec de valeur manquante** | Accès direct sur clé absente = erreur bruyante immédiate. Boucle `{{ range }}` sur liste absente = échec silencieux, zéro itération. Clé présente mais valeur vide = rendu incomplet, invalide seulement à l'application réelle. Aucune des trois n'est détectée de la même façon — la relecture complète du rendu reste la seule protection fiable contre les trois. |
-| **Coexistence de deux moteurs de templating** | `{{ }}` (Helm, résolu au rendu) et `$(VAR)` (Kubernetes natif, résolu au runtime dans `command:`) peuvent apparaître dans le même fichier sans conflit, à condition de ne jamais les confondre — Helm ne touche jamais la syntaxe `$(VAR)`. |
-| **La conversion en charts séparés n'élimine pas la duplication de secrets, elle peut même en réintroduire** | Confirmé concrètement sur `redis` — chaque nouvelle conversion doit vérifier activement sa cohérence avec les consommateurs existants, pas seulement sa propre validité interne. |
-| **Vérification du contenu généré, pas seulement de l'absence d'erreur** | La relecture du YAML produit par `helm template` reste indispensable, en particulier autour de toute logique conditionnelle, de boucle, ou de référence à une clé `values.yaml`. |
-| **Transparence d'une bascule bien menée** | Les services consommateurs (via le `Service` DNS) n'ont subi aucune interruption — la migration d'un composant vers Helm n'affecte pas ses consommateurs tant que le contrat d'interface (nom du Service, port) reste stable. |
-
 ---
 
 ## Charts 6 à 9 — `ordering-api`, `basket-api`, `webhooks-api`, `webhook-client`
@@ -396,15 +362,6 @@ curl -s -o /dev/null -w "%{http_code}\n" http://192.168.56.11:5114
 
 **Comportement transitoire observé sur les quatre :** chaque ancien Pod (géré par `kubectl` brut) est passé par un état `Completed` transitoire lors de la bascule vers Helm — fin de vie normale d'un `Deployment` supprimé, sans conséquence.
 
-### Piliers consolidés durant cette série
-
-| Concept | Application |
-|---|---|
-| **Maturité méthodologique confirmée** | Quatre conversions consécutives sans bug de templating — la discipline de vérification (`helm lint`/`helm template`/relecture) est désormais un réflexe, pas une étape supplémentaire pénible. |
-| **Vigilance ciblée sur les secrets partagés** | La vérification proactive du mot de passe Redis avant conversion de `basket-api` a directement empêché la récidive d'un bug déjà coûteux — la dette de duplication de secrets entre charts reste réelle, mais gérable par une discipline systématique de vérification croisée. |
-| **Synchronisation par valeur unique, motif réutilisable** | Le pattern `{{ .Values.x.externalPort }}` réutilisé pour un `Service` NodePort et l'URL de callback correspondante, appliqué maintenant sur deux services (`identity-api`, `webhook-client`). |
-| **Transition Pod `Completed` normale** | Un ancien `Deployment` supprimé laisse transitoirement son dernier Pod en `Completed` avant disparition complète — signal normal de fin de cycle de vie, pas un bug. |
-
 ---
 
 ## Charts 10 à 12 — `order-processor`, `payment-processor` & `webapp` (achèvement complet)
@@ -457,19 +414,6 @@ curl -s -o /dev/null -w "%{http_code}\n" http://192.168.56.11:5100
 
 ---
 
-## Piliers consolidés sur l'ensemble de la migration Helm
-
-| Concept | Application transversale |
-|---|---|
-| **Résolution structurelle du problème `${VAR}`** | Chaque chart Helm remplace des dizaines de valeurs figées ou de variables non substituées par un templating réellement exécuté — fondement de toute cette migration. |
-| **Trois variantes distinctes d'échec de valeur manquante** | Erreur bruyante (accès direct), échec silencieux total (boucle vide), rendu incomplet mais invalide seulement à l'application (champ vide) — chacune nécessitant une vigilance de détection différente. |
-| **Persistance des données indépendante du cycle de vie Helm** | Confirmée systématiquement sur les 3 StatefulSets — `helm install`/`uninstall` répétés ne recréent jamais un volume existant. |
-| **Synchronisation par valeur unique** | Pattern répété avec succès sur `identity-api` (IssuerUri ↔ NodePort) et `webhook-client`/`webapp` (CallBackUrl ↔ NodePort) — élimine par construction un risque de désynchronisation manuelle déjà coûteux en Phase K8s brute. |
-| **La conversion en charts séparés n'élimine pas la duplication de secrets, elle exige une vigilance active** | Confirmé positivement sur `basket-api` : la vérification proactive du mot de passe Redis avant toute création de fichier a directement empêché une récidive du bug `NOAUTH`. |
-| **Autonomie de chaque chart comme choix de conception** | Duplication volontaire de Secrets entre `order-processor` et `ordering-api` (plutôt que réutilisation) — cohérent avec le principe qu'un chart doit pouvoir s'installer seul, sans dépendance implicite envers un autre chart. |
-
----
-
 ## Progression
 
 | Chart | Statut |
@@ -478,10 +422,6 @@ curl -s -o /dev/null -w "%{http_code}\n" http://192.168.56.11:5100
 
 ---
 
-## 🔜 Prochaine étape naturelle
+## Suite
 
-Avec la CI (GitHub Actions + GHCR) et Helm désormais tous deux en place, la suite logique du parcours DevOps est **ArgoCD** — synchronisation GitOps automatique entre ce dépôt Git (contenant maintenant les 12 charts) et l'état réel du cluster K3s, remplaçant les `helm install`/`upgrade` manuels par une réconciliation continue.
-
----
-
-*Document — Méthode Josue, Mentor DevOps Senior.*
+Avec la CI (GitHub Actions + GHCR) et Helm désormais tous deux en place, la suite logique est **ArgoCD** — synchronisation GitOps automatique entre ce dépôt Git (contenant maintenant les 12 charts) et l'état réel du cluster K3s, remplaçant les `helm install`/`upgrade` manuels par une réconciliation continue.

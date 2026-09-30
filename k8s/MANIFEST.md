@@ -328,14 +328,7 @@ Pour les deux services, `replicas: N > 1` sans mécanisme de clustering réel pr
 
 ⚠️ **[PROD BEST PRACTICE]** Une vraie haute disponibilité pour ces deux services nécessite soit un mode cluster natif (Redis Cluster, RabbitMQ avec peer discovery), soit un opérateur Kubernetes dédié — hors de portée d'un `StatefulSet` fait main, sujet de Phase 2/3.
 
-### Piliers consolidés durant cette étape
-
-| Concept | Application concrète |
-|---|---|
-| **Outils de diagnostic natifs pour les probes** | `pg_isready`, `rabbitmq-diagnostics ping`, `redis-cli ping` — toujours préférer l'outil officiel de la techno à un simple test de port TCP, qui ne garantit jamais qu'un service est fonctionnellement prêt. |
-| **Readiness vs Liveness** | *Readiness* : "dois-je recevoir du trafic ?" (retrait sans redémarrage). *Liveness* : "suis-je bloqué, faut-il me recréer ?" — délais de tolérance volontairement différents (`initialDelaySeconds` plus court pour readiness). |
-| **Stateful ≠ réplication automatique** | Rappel transversal (déjà vu sur Postgres) : scaler un `StatefulSet` donne des identités et volumes séparés, jamais une synchronisation de données automatique. |
-| **Substitution de variables : deux mécanismes distincts** | `$(VAR)` dans `command`/`args` (natif K8s) vs lecture shell classique (`$VAR` via `sh -c`) dans les probes — ne pas confondre les deux contextes. |
+Les probes utilisent les outils de diagnostic natifs de chaque techno (`pg_isready`, `rabbitmq-diagnostics ping`, `redis-cli ping`) plutôt qu'un simple test de port TCP, qui ne garantit jamais qu'un service est fonctionnellement prêt. Distinction readiness/liveness volontaire : readiness retire un Pod de la rotation sans le redémarrer, liveness le recrée — d'où un `initialDelaySeconds` plus court côté readiness.
 
 ---
 
@@ -398,16 +391,6 @@ kubectl describe pod -l app=catalog-api | grep -A5 Events
 # Pulling image "localhost:5000/catalog-api:latest"
 # Successfully pulled image ... in 18ms
 ```
-
-### Piliers consolidés durant cette étape
-
-| Concept | Application concrète |
-|---|---|
-| **Pas de templating natif en K8s** | `${VAR}` n'est jamais substitué par `kubectl apply` — toute valeur doit être littérale dans le manifest, ou gérée via un outil dédié (Helm, Kustomize) non couvert ici. |
-| **Immutabilité des variables d'environnement d'un Pod** | Modifier un Secret/ConfigMap référencé ne relance pas automatiquement les Pods qui le consomment — `kubectl rollout restart` est requis. |
-| **Séparation "endpoint de diagnostic" vs "endpoint pour orchestrateur"** | Un health check applicatif complet (vérifie les dépendances) et une probe minimale pour l'orchestrateur (vérifie juste que le process répond) répondent à des besoins différents. |
-| **Résilience distribuée** | Une probe ne doit jamais elle-même devenir un facteur d'aggravation de panne sous charge — principe transversal à tout système distribué. |
-| **Absence de `depends_on`** | Résilience déléguée au code applicatif (retry client Npgsql/RabbitMQ) et aux probes, jamais à un ordre de démarrage garanti par la plateforme. |
 
 ---
 
@@ -487,14 +470,6 @@ curl -s -o /dev/null -w "%{http_code}\n" http://192.168.56.11:5223/.well-known/o
 # 200
 ```
 
-### Piliers consolidés durant cette étape
-
-| Concept | Application concrète |
-|---|---|
-| **Double exposition Service pour un besoin double** | Un seul `Deployment` peut être ciblé par plusieurs `Service` différents, chacun avec un rôle distinct (interne vs externe) — pattern réutilisable pour tout service ayant ce même besoin dual. |
-| **`kubectl describe pod` avant `kubectl logs`** | Pour tout Pod qui ne démarre jamais son conteneur (`CreateContainerConfigError`, `ImagePullBackOff`...), `describe` + section `Events` est la première commande à lancer — `logs` ne fonctionne que si le conteneur a démarré au moins une fois. |
-| **Exactitude stricte des noms d'objets K8s** | 3ᵉ occurrence de bug de nommage depuis le début du parcours — Kubernetes ne tolère aucune approximation entre le nom déclaré et le nom référencé. |
-
 ---
 
 ## Étape 5 — `ordering-api` (Deployment)
@@ -545,14 +520,6 @@ kubectl apply -f ordering-deployment.yaml
 
 Aucun bug rencontré — les erreurs de nommage, de casse YAML, et de gestion des `${VAR}` identifiées sur les étapes précédentes (Postgres, RabbitMQ, catalog-api, identity-api) ont toutes été évitées de manière proactive à l'écriture initiale des fichiers.
 
-### Piliers consolidés durant cette étape
-
-| Concept | Application concrète |
-|---|---|
-| **Séparation Secret / ConfigMap appliquée sans erreur** | Connection strings (sensibles) dans le Secret, `Identity__Url` (non sensible) dans le ConfigMap — distinction appliquée correctement dès l'écriture initiale, sans itération corrective. |
-| **Interne vs externe, choix cohérent d'emblée** | `Identity__Url` pointant vers le Service `ClusterIP` interne, pas vers le NodePort externe — distinction déjà rencontrée à plusieurs reprises (registre Docker, Identity issuer) appliquée correctement sans erreur cette fois. |
-| **Maturité méthodologique** | Premier service migré sans aucun bug de casse, de nommage, ou de référence — signe que la méthode de traduction Compose → K8s est désormais intégrée, pas seulement suivie mécaniquement. |
-
 ---
 
 ## Étape 6 — `order-processor`, `basket-api` & `payment-processor`
@@ -584,16 +551,6 @@ Validé après correction : `redis-cli -a changeme ping` → `PONG`, `basket-api
 Worker sans `Service`, sans probes. Contrairement à `order-processor`, utilise un **Secret dédié** (`payment-processor-secrets`) plutôt qu'une réutilisation — ce service ne touche que RabbitMQ, pas Postgres, donc aucun Secret existant à partager. `ConnectionStrings__EventBus` en PascalCase, fidèle à la casse exacte du `docker-compose.yml` d'origine (différente de `ConnectionStrings__eventbus` ailleurs — vérifié avant de considérer ça comme une incohérence).
 
 Validé : `1/1 Running`, connexion RabbitMQ démarrée.
-
-### Piliers consolidés durant cette étape
-
-| Concept | Application concrète |
-|---|---|
-| **Service = uniquement pour ce qui reçoit du trafic** | Confirmé en pratique avec `order-processor`/`payment-processor` : décision prise par raisonnement avant l'écriture du manifest. |
-| **Réduction de duplication des Secrets, avec discernement** | `order-processor` réutilise `ordering-api-secrets` (mêmes dépendances qu'`ordering-api`) ; `payment-processor` a son propre Secret (dépendances différentes) — la réutilisation n'est pas systématique, elle dépend de ce qui est réellement partagé. |
-| **Le protocole applicatif (gRPC) est transparent pour le Service K8s** | Un `Service` route au niveau TCP, sans connaissance de HTTP/1.1 vs HTTP/2 — seule une future couche Ingress devra en tenir compte explicitement. |
-| **Un Secret modifié ne relance jamais les Pods automatiquement** | 2ᵉ occurrence de cette leçon (après l'Étape 3) — `kubectl rollout restart` reste un réflexe obligatoire après toute modification de Secret/ConfigMap consommé en variable d'environnement. |
-| **Un fix de cause racine tient à travers un changement d'environnement** | Le correctif `IssuerUri` (Phase 1 Docker Compose) continue de fonctionner sans modification sur K3s — preuve que c'était une correction structurelle, pas un contournement local. |
 
 ---
 
@@ -629,16 +586,6 @@ Error: libgssapi_krb5.so.2: cannot open shared object file: No such file or dire
 Npgsql tente par défaut une négociation **GSS encryption** (Kerberos), nécessitant une bibliothèque native absente de l'image `aspnet` minimale. Ce n'est pas une exception .NET structurée — remarquer l'absence de préfixe `info:`/`warn:`/`fail:` : c'est un `dlopen` natif qui écrit directement sur stderr, en dehors du logger ASP.NET. Npgsql détecte l'échec et retombe automatiquement sur une négociation TLS classique sans GSSAPI.
 
 Juste après, `fail: ... Failed executing DbCommand` sur `SELECT "MigrationId" FROM "__EFMigrationsHistory"` est le comportement **normal** d'EF Core sur une base neuve : la table n'existe pas encore avant la première migration, la requête échoue une fois par construction (`relation does not exist`), et EF Core en déduit qu'il doit appliquer `Initial` — ce qui suit immédiatement. Probablement rencontré aussi sur `catalog-api`/`ordering-api`/`identity-api` (bases créées fraîches par le script d'init Postgres K8s), simplement pas visible dans les extraits de logs collés à l'époque.
-
-### Piliers consolidés durant cette étape
-
-| Concept | Application concrète |
-|---|---|
-| **Un Secret dédié quand aucune réutilisation n'est pertinente** | `payment-processor` n'a pas de dépendance Postgres commune avec un autre service migré — contrairement à `order-processor`/`ordering-api`, un Secret dédié était la bonne approche, pas une règle générale de "toujours dédupliquer". |
-| **Incohérences de casse héritées du code source, à ne pas corriger sans raison** | `ConnectionStrings__EventBus` vs `ConnectionStrings__eventbus` : différence sans impact fonctionnel, conservée telle quelle par fidélité à la source. |
-| **Avertissement natif vs erreur applicative** | Un message sans préfixe de logger structuré (`libgssapi_krb5`) provient d'une bibliothèque native, pas du code .NET — à diagnostiquer différemment d'une exception classique. |
-| **Échec attendu sur base neuve** | Le premier `SELECT __EFMigrationsHistory` échoue systématiquement avant la toute première migration — normal, pas à confondre avec une vraie panne de connexion. |
-| **Méthode stabilisée** | 8 services migrés consécutifs sans bug de structure (Secret/ConfigMap/Deployment/Service) — seuls les patterns spécifiques à chaque service demandent encore une adaptation. |
 
 ---
 
@@ -681,14 +628,6 @@ Root cause : même mismatch de mot de passe Redis que celui déjà documenté et
 **Solution structurelle à envisager (Phase 2/3) :** un gestionnaire de secrets externe (Vault, AWS Secrets Manager) comme source unique de vérité, éliminant la duplication manuelle entre Secrets Kubernetes.
 
 Validé après re-confirmation : catalogue affiché avec succès (filtres, marques, images), panier fonctionnel — flux complet de bout en bout validé.
-
-### Piliers consolidés durant cette étape
-
-| Concept | Application concrète |
-|---|---|
-| **Interne vs externe (DNS)** | Confirmé une nouvelle fois sur `webhook-client` et `webapp` — le pattern le plus récurrent de toute la migration, désormais appliqué sans hésitation même sur le service le plus connecté. |
-| **Diagnostic au bon niveau (service appelé, pas appelant)** | Un message d'erreur générique côté client (gRPC, HTTP) ne doit jamais être pris pour la cause réelle — toujours remonter aux logs du service qui a effectivement levé l'exception. |
-| **Dette technique confirmée par l'usage réel** | Les secrets dupliqués, identifiés en théorie dès l'Étape 3, ont produit un vrai bug fonctionnel ici — une dette tracée tôt permet un diagnostic rapide plutôt qu'une découverte à l'aveugle. |
 
 ---
 
@@ -763,18 +702,6 @@ basket-api → eshop.local/identity → identity-api (même issuer)
 
 ---
 
-## Piliers consolidés durant cette étape
-
-| Concept | Application concrète |
-|---|---|
-| **Stateless vs Stateful** | StatefulSet pour Postgres (identité stable, volume dédié) vs futur Deployment pour les API (interchangeables) |
-| **Service headless vs classique** | `clusterIP: None` pour cibler une instance précise, pas du load-balancing arbitraire |
-| **Séparation code/config/secrets** | `Secret` (sensible) vs `ConfigMap` (non sensible), tous deux référencés par nom depuis le StatefulSet, jamais en valeur brute |
-| **Absence de `depends_on` en K8s** | Aucune garantie d'ordre de démarrage runtime entre objets — seule la résolution de références déclaratives (Secret/ConfigMap doivent exister) est concernée par l'ordre d'`apply` |
-| **Séparation des responsabilités (dette identifiée)** | Un composant qui vit en continu (StatefulSet) ne devrait pas porter la responsabilité d'une opération ponctuelle (provisioning de données) — rôle destiné à un `Job` |
-
----
-
 ## Progression Phase 1 K8s
 
 | Étape | Statut |
@@ -801,6 +728,6 @@ basket-api → eshop.local/identity → identity-api (même issuer)
 
 ---
 
-## 🔜 Prochaine étape
+## Reste à faire
 
-Stack applicative complète — reste la dette technique accumulée à traiter avant de clore la Phase 1 K8s : `migrations-job.yaml` (Job EF Core dédié, Étape 1) et le script d'init Postgres en `Job` séparé. Ensuite, `ingress.yaml` (Traefik) pourrait remplacer les `NodePort` (`identity-api-external`, `webhook-client-external`, `webapp-external`) par une exposition unifiée sous `eshop.local`. Au-delà, Phase 2 (Terraform, GitLab CI/CD) selon la roadmap de `DEVOPS.md`.
+Stack applicative complète — reste la dette technique accumulée à traiter : `migrations-job.yaml` (Job EF Core dédié, Étape 1) et le script d'init Postgres en `Job` séparé. Ensuite, `ingress.yaml` (Traefik) pourrait remplacer les `NodePort` (`identity-api-external`, `webhook-client-external`, `webapp-external`) par une exposition unifiée sous `eshop.local`.

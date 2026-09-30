@@ -155,7 +155,7 @@ jobs:
             ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.service.name }}:latest
 ```
 
-**Pourquoi la matrix, choix confirmé "comme en entreprise" :**
+**Pourquoi la matrix :**
 - **Maintenance** : une modification du pipeline (version d'action, étape de scan) se fait une fois, pas neuf fois avec risque de divergence.
 - **Lisibilité d'historique Git** : un commit modifiant le workflow raconte une histoire claire, contre neuf fichiers modifiés simultanément.
 - **Usage canonique** : c'est le cas d'usage documenté pour lequel la fonctionnalité `matrix` existe, pas un détournement.
@@ -188,18 +188,6 @@ Pods redémarrés avec la nouvelle image, sans interruption (RollingUpdate)
 
 ---
 
-## 🧠 Piliers consolidés
-
-| Concept | Application |
-|---|---|
-| **CI avant GitOps** | Ordre naturel en entreprise : fiabiliser la production d'artefacts avant d'automatiser leur déploiement. |
-| **`.gitignore` et gitlinks silencieux** | Deux mécanismes Git distincts peuvent masquer un contenu sans jamais produire d'erreur visible — `git ls-files` reste le réflexe de vérification fiable. |
-| **`strategy: matrix` comme standard professionnel** | Une seule source de vérité pour N variations d'un même pipeline, plutôt que N fichiers dupliqués — choix confirmé "comme en entreprise", pas une simplification de convenance. |
-| **`fail-fast: false`** | Visibilité indépendante par service dans un pipeline parallélisé — un échec isolé ne doit jamais masquer l'état des autres composants. |
-| **Tag SHA vs `latest`** | Chaque image poussée porte aussi le SHA du commit (`${{ github.sha }}`) — traçabilité complète entre code et artefact, `latest` conservé en parallèle uniquement pour compatibilité de transition. |
-
----
-
 ## ⚠️ Dette technique à retenir
 
 - **Packages publics** plutôt que privés + `imagePullSecret` — acceptable en apprentissage, à revoir pour un scénario plus proche de la prod.
@@ -208,10 +196,6 @@ Pods redémarrés avec la nouvelle image, sans interruption (RollingUpdate)
 
 ---
 
-## 🔜 Prochaine étape naturelle
+## Suite
 
 Helm ou Kustomize — pour résoudre structurellement deux dettes déjà tracées depuis les premières étapes de migration : l'absence de templating natif Kubernetes (`${VAR}` jamais substitué) et la duplication de secrets entre objets (`ConnectionStrings__redis` divergent, cause du bug diagnostiqué sur `basket-api`).
-
----
-
-*Document — Méthode Josue, Mentor DevOps Senior.*
